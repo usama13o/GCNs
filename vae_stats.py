@@ -359,7 +359,7 @@ from torch_geometric.utils import to_dense_adj, grid,dense_to_sparse
 from monai.data import GridPatchDataset, DataLoader, PatchIter
 patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
 #patching each image
-with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
+with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
     k = pickle.load(f)
 pil = ToPILImage()
 to_tensor=ToTensor()
@@ -630,6 +630,8 @@ class AverageMeter:
         self.sum += val * n
         self.count += n
         self.avg = self.sum / self.count
+# %%
+
 class GCN(torch.nn.Module):
     '''
     Can add edge_atttr using the second out of dense_to_sparse
@@ -638,38 +640,40 @@ class GCN(torch.nn.Module):
         super().__init__()
         torch.manual_seed(1234)
         
-        gcon = EdgeConv
-        self.conv1 = gcon(Sequential(Linear(2*1024, 512)))
+        gcon = GCNConv
+        self.conv1 = gcon(1024, 512)
 
-        self.conv2 =gcon(Sequential(Linear(2*512, 256)))#gcon(512, 256)
-        self.conv3 =gcon(Sequential(Linear(2*256, 256)))#gcon(512, 256)
-        self.conv4 =gcon(Sequential(Linear(2*256, 128)))#gcon(512, 256)
-        self.conv5 =gcon(Sequential(Linear(2*128, 64)))#gcon(512, 256)
-        self.conv6 =gcon(Sequential(Linear(2*64, 32)))#gcon(512, 256)
-        self.classifier = Linear(32, 3)
+        self.conv2 =gcon(512, 256)
+        self.conv3 =gcon(256, 128)
+        self.conv4 =gcon(128, 64)
+        self.conv5 =gcon(64, 32)
+        self.conv6 =gcon(32, 16)
+        self.classifier = Linear(16, 3)
+        # self.gat = PNA(1024,512,6,2,True,edge_dim=-1)
 
-    def forward(self, x, edge_index,batch):
-        h = self.conv1(x, edge_index)
+    def forward(self, x, edge_index,edge_attr=None,batch=None):
+        h = self.conv1(x, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv2(h, edge_index)
+        h = self.conv2(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv3(h, edge_index)
+        h = self.conv3(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv4(h, edge_index)
+        h = self.conv4(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv5(h, edge_index)
+        h = self.conv5(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv6(h, edge_index)
+        h = self.conv6(h, edge_index,edge_attr)
+        # h = self.gat(x,edge_index,edge_attr)
         # h = h.tanh()  # Final GNN embedding space.
-        h = global_mean_pool(h,batch)  # [batch_size, hidden_channels]
+        h= global_mean_pool(h,batch)  # [batch_size, hidden_channels]
 
         # Apply a final (linear) classifier.
         out = self.classifier(h)
 
         return out#, h
+from torch_geometric.nn.models import GAT, PNA
 
-
-# %%
+model = GCN()
 # print(f'Embedding shape: {list(out.shape)}')
 
 import time
@@ -683,7 +687,7 @@ from torch.functional import F
 
 
 # calculate the occurence of each cluster assignment and the taragets for each cluster
-m=4
+m=8
 cluisters = np.zeros(m)
 #init one for each class 1 , 0 
 clusters_0 = np.zeros(m)

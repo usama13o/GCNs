@@ -1,4 +1,5 @@
 # %%
+import time
 import pytorch_lightning as pl
 from torch import nn
 from torch.nn import functional as F
@@ -21,8 +22,17 @@ args.add_argument("--dataset",type=str,default="")
 args.add_argument("--k", type=int, default=8)
 
 args = args.parse_args()
-print(args._get_args())
 
+#log file name  - date and time
+log_file_name = "vae_log_k-" + str(args.k) + "_" + time.strftime("%Y%m%d-%H%M%S") 
+#init log file txt
+f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","w")
+f.close()
+#modify print to be log to txt (Doesn't seem to do the trick !)
+# def print(string,fname=log_file_name):
+    # print(string)
+    # with open(fname, 'a') as f:
+        # f.write(string+"\n")
 class VAE(pl.LightningModule):
     def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
         super().__init__()
@@ -539,10 +549,11 @@ class ImageTOGraphDataset(Dataset):
     """ 
     Dataset takes holds the kmaens classifier and vae encoder. On each input image we encode then get k mean label then formulate graph as Data object
     """
-    def __init__(self,data,vae,kmeans):
+    def __init__(self,data,vae,kmeans,norm_adj=True):
         self.data=data
         self.vae=vae
         self.kmeans=kmeans
+        self.norm_adj = norm_adj
         self.patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
     def __len__(self):
         return len(self.data)
@@ -558,6 +569,14 @@ class ImageTOGraphDataset(Dataset):
         label=self.kmeans.predict(z)
         s,out_adj = populateS(label)
         x = np.matmul(s.transpose(1,0) , z)
+
+        #if normlaise adj 
+        if self.norm_adj:
+            out_adj = out_adj.div(out_adj.sum(1))
+            #nan to 0 in tensor 
+            out_adj = out_adj.nan_to_num(0)
+            #assert if there is nan in tensor
+            assert out_adj.isnan().any() == False , "Found nan in out_adj"
         return Data(x=torch.tensor(x).float(),edge_index=dense_to_sparse(out_adj)[0],y=self.data[index][1],edge_attr=dense_to_sparse(out_adj)[1])
 
 class KDataset(Dataset):
@@ -589,6 +608,11 @@ class KDataset(Dataset):
 from torch_geometric.loader import DataLoader as GraphDataLoader
 ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k)
 train_loader =GraphDataLoader(ImData, batch_size=8, shuffle=True, num_workers=0)
+#print dataset stats
+print("Dataset stats:")
+print("Number of graphs: {}".format(len(ImData)))
+print("Number of features: {}".format(ImData.num_features))
+print("batch size: {}".format(train_loader.batch_size))
 
 valid_dataset= HDF5Dataset("/home/uz1/DATA!/pcam/pcam/validation_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_valid_y.h5",limit=10000,transform=transform)
 ImData_valid = ImageTOGraphDataset(data=valid_dataset,vae=vae,kmeans=k)
@@ -639,29 +663,29 @@ class GCN(torch.nn.Module):
         super().__init__()
         torch.manual_seed(1234)
         
-        gcon = EdgeConv
-        self.conv1 = gcon(Sequential(Linear(2*1024, 512)))
+        gcon = GCNConv
+        self.conv1 = gcon(1024, 512)
 
-        self.conv2 =gcon(Sequential(Linear(2*512, 256)))#gcon(512, 256)
-        self.conv3 =gcon(Sequential(Linear(2*256, 256)))#gcon(512, 256)
-        self.conv4 =gcon(Sequential(Linear(2*256, 128)))#gcon(512, 256)
-        self.conv5 =gcon(Sequential(Linear(2*128, 64)))#gcon(512, 256)
-        self.conv6 =gcon(Sequential(Linear(2*64, 32)))#gcon(512, 256)
-        self.classifier = Linear(8, 3)
+        self.conv2 =gcon(512, 256)
+        self.conv3 =gcon(256, 128)
+        self.conv4 =gcon(128, 64)
+        self.conv5 =gcon(64, 32)
+        self.conv6 =gcon(32, 16)
+        self.classifier = Linear(16, 3)
         # self.gat = PNA(1024,512,6,2,True,edge_dim=-1)
 
     def forward(self, x, edge_index,edge_attr=None,batch=None):
-        h = self.conv1(x, edge_index)
+        h = self.conv1(x, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv2(h, edge_index)
+        h = self.conv2(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv3(h, edge_index)
+        h = self.conv3(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv4(h, edge_index)
+        h = self.conv4(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv5(h, edge_index)
+        h = self.conv5(h, edge_index,edge_attr)
         h = h.relu()
-        h = self.conv6(h, edge_index)
+        h = self.conv6(h, edge_index,edge_attr)
         # h = self.gat(x,edge_index,edge_attr)
         # h = h.tanh()  # Final GNN embedding space.
         h= global_mean_pool(h,batch)  # [batch_size, hidden_channels]
@@ -676,10 +700,15 @@ model = GCN()
 # model = GAT(1024,512,6,2,True)
 print(model)
 
+#move to gpu if available
+if torch.cuda.is_available():
+    model.cuda()
+#set device to gpu
+device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+print("Device: ",device)
 # %%
 # print(f'Embedding shape: {list(out.shape)}')
 
-import time
 from tqdm import tqdm
 from torch_geometric.loader import DataLoader
 from torch_geometric.nn.models import GraphUNet
@@ -690,7 +719,8 @@ optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)  # Define optimizer
 data_laoder = train_loader
 def train(data):
     optimizer.zero_grad()  # Clear gradients.
-    # print(data)
+    # move gpu
+    data.to(device)
     out = model(data.x, data.edge_index,data.edge_attr.float(),data.batch)#,data.edge_weight.float())  # Perform a single forward pass.
     # print(torch.tensor(data.y).shape)
     loss = criterion(out.softmax(-1), data.y)  # Compute the loss solely based on the training nodes.
@@ -702,11 +732,6 @@ def valid(data):
     out = model(data.x, data.edge_index,data.edge_attr.float(),data.batch)#,data.edge_weight.float())  # Perform a single forward pass.
     loss = criterion(out.softmax(-1), data.y)  # Compute the loss solely based on the training nodes.
     return loss,out
-#log file name  - date and time
-log_file_name = "vae_log_k-" + str(args.k) + "_" + time.strftime("%Y%m%d-%H%M%S") 
-#init log file txt
-f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","w")
-f.close()
 # init csv for metric log 
 with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","w") as f:
     f.write("epoch,loss,accuracy,val_loss,val_accuracy\n")
@@ -729,8 +754,8 @@ for epoch in range(1000):
             accc = (pred == data.y).float().mean()
             acc.update(accc.item())
             print(f'Accuracy: {acc.val:.4f} ({acc.avg})')
-            print("Unique predictions ",np.unique(pred,return_counts=True))
-            print("Unique labels ",np.unique(data.y,return_counts=True))
+            print("Unique predictions ",np.unique(pred.cpu(),return_counts=True))
+            print("Unique labels ",np.unique(data.y.cpu(),return_counts=True))
             #save results in text file
             f.write(f'Epoch: {epoch}, Loss: {losses.val:.4f} ({losses.avg}), Accuracy: {acc.val:.4f} ({acc.avg})\n')
     f.close()
