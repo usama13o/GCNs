@@ -13,7 +13,7 @@ import torch
 import argparse 
 
 args = argparse.ArgumentParser()
-args.add_argument("--batch_size", type=int, default=32)
+args.add_argument("--batch_size", type=int, default=8, help="size of the batches")
 args.add_argument("--epochs", type=int, default=100)
 args.add_argument("--lr", type=float, default=0.001)
 args.add_argument("--weight_decay", type=float, default=0.0)
@@ -279,6 +279,9 @@ if args.dataset == "wss":
                          transform)
 elif args.dataset == "pcam":
     data = HDF5Dataset("/home/uz1/DATA!/pcam/pcam/training_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_train_y.h5",transform=transform)
+if args.dataset == 'medmnist-path':
+    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+    data = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
 else:
     raise ValueError("Dataset not supported")
 loader = DataLoader(data, batch_size=32, drop_last=True, num_workers=16)
@@ -344,12 +347,20 @@ transform = transforms.Compose([
     transforms.Resize((128,128)),
 ])
 if args.dataset == "wss":
+    n_classes=4
     data_128 = wss_dataset_class("/home/uz1/data/wsss/train/1.training", 'all',
                          transform)
 if args.dataset == "pcam":
+    n_classes=3
     data_128 = data
     data_128.transform = transform
     data_128.limit=30000
+    valid_dataset= HDF5Dataset("/home/uz1/DATA!/pcam/pcam/validation_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_valid_y.h5",limit=10000,transform=transform)
+if args.dataset == 'medmnist-path':
+    n_classes=9
+    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+    data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
 loader = DataLoader(data_128, batch_size=32, drop_last=True, num_workers=16)
 
 
@@ -386,21 +397,25 @@ def get_embedding_vae(x,vae):
 	q = torch.distributions.Normal(mu, std)
 	z = q.rsample()
 	return z 
-def populateS(labels,shape=(16,8),s=None):
+from math import sqrt
+def populateS(labels,n_clusters=8,s=None):
     """"
     Calculates the S cluster assigment transform of input patch features 
     and returns the (S) and the aggregated (out_adj) as well.
+    shape : ( number of patches , number of clusters)
     """
     # print("S is " ,s==None)
+    n_patches=len(label)
+    div = int(sqrt(n_patches))
     if s == None: 
-        s= np.zeros(shape)
+        s = np.zeros((n_patches,n_clusters))
         for i in range(s.shape[0]):
             s[i][labels[i]] = 1
     else:
         s=s
     
     #calc adj matrix
-    adj = to_dense_adj(grid(shape[0]//4,shape[0]//4)[0]).reshape(shape[0],shape[0])
+    adj = to_dense_adj(grid(n_patches//div,n_patches//div)[0]).reshape(n_patches,n_patches)
     return s , np.matmul(np.matmul(s.transpose(1, 0),adj ), s)
 # %%
 # %%
@@ -577,7 +592,7 @@ class ImageTOGraphDataset(Dataset):
             out_adj = out_adj.nan_to_num(0)
             #assert if there is nan in tensor
             assert out_adj.isnan().any() == False , "Found nan in out_adj"
-        return Data(x=torch.tensor(x).float(),edge_index=dense_to_sparse(out_adj)[0],y=self.data[index][1],edge_attr=dense_to_sparse(out_adj)[1])
+        return Data(x=torch.tensor(x).float(),edge_index=dense_to_sparse(out_adj)[0],y=torch.tensor(self.data[index][1]),edge_attr=dense_to_sparse(out_adj)[1])
 
 class KDataset(Dataset):
     
@@ -606,15 +621,15 @@ class KDataset(Dataset):
 
 
 from torch_geometric.loader import DataLoader as GraphDataLoader
+
 ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k)
-train_loader =GraphDataLoader(ImData, batch_size=8, shuffle=True, num_workers=0)
+train_loader =GraphDataLoader(ImData, batch_size=args.batch_size, shuffle=True, num_workers=0)
 #print dataset stats
 print("Dataset stats:")
 print("Number of graphs: {}".format(len(ImData)))
 print("Number of features: {}".format(ImData.num_features))
 print("batch size: {}".format(train_loader.batch_size))
 
-valid_dataset= HDF5Dataset("/home/uz1/DATA!/pcam/pcam/validation_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_valid_y.h5",limit=10000,transform=transform)
 ImData_valid = ImageTOGraphDataset(data=valid_dataset,vae=vae,kmeans=k)
 valid_loader = GraphDataLoader(ImData_valid,batch_size=16,shuffle=True,num_workers=0)
 
@@ -659,7 +674,7 @@ class GCN(torch.nn.Module):
     '''
     Can add edge_atttr using the second out of dense_to_sparse
     '''
-    def __init__(self):
+    def __init__(self,n_classes=3):
         super().__init__()
         torch.manual_seed(1234)
         
@@ -671,7 +686,7 @@ class GCN(torch.nn.Module):
         self.conv4 =gcon(128, 64)
         self.conv5 =gcon(64, 32)
         self.conv6 =gcon(32, 16)
-        self.classifier = Linear(16, 3)
+        self.classifier = Linear(16, n_classes)
         # self.gat = PNA(1024,512,6,2,True,edge_dim=-1)
 
     def forward(self, x, edge_index,edge_attr=None,batch=None):
@@ -696,7 +711,7 @@ class GCN(torch.nn.Module):
         return out#, h
 from torch_geometric.nn.models import GAT, PNA
 
-model = GCN()
+model = GCN(n_classes=n_classes)
 # model = GAT(1024,512,6,2,True)
 print(model)
 
@@ -715,7 +730,7 @@ from torch_geometric.nn.models import GraphUNet
 from torch.functional import F
 # model = GraphUNet(9,128,2,4,act=F.tanh)
 criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
-optimizer = torch.optim.Adam(model.parameters(), lr=0.00001)  # Define optimizer.
+optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)  # Define optimizer.
 data_laoder = train_loader
 def train(data):
     optimizer.zero_grad()  # Clear gradients.
@@ -729,52 +744,65 @@ def train(data):
     return loss,out
 def valid(data):
     optimizer.zero_grad()  # Clear gradients.
+    data.to(device)
     out = model(data.x, data.edge_index,data.edge_attr.float(),data.batch)#,data.edge_weight.float())  # Perform a single forward pass.
     loss = criterion(out.softmax(-1), data.y)  # Compute the loss solely based on the training nodes.
     return loss,out
-# init csv for metric log 
-with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","w") as f:
-    f.write("epoch,loss,accuracy,val_loss,val_accuracy\n")
 
-for epoch in range(1000):
-    # track using tqdm
-    tqdm_bar = tqdm(data_laoder)
-    losses = AverageMeter()
-    acc = AverageMeter()
-    for i,data in enumerate(tqdm_bar):
-        f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","a")
+try:
+    # init csv for metric log 
+    with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","w") as f:
+        f.write("epoch,loss,accuracy,val_loss,val_accuracy\n")
 
-        loss,out = train(data)
-        if i % 500 == 0:
-            losses.update(loss.item())
-            print(f'Epoch: {epoch}, Loss: {losses.val:.4f} ({losses.avg})')
+    for epoch in range(1000):
+        # track using tqdm
+        tqdm_bar = tqdm(data_laoder)
+        losses = AverageMeter()
+        acc = AverageMeter()
+        for i,data in enumerate(tqdm_bar):
+            f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","a")
 
-            #calculate acc
+            loss,out = train(data)
+            if i % 500 == 0:
+                losses.update(loss.item())
+                print(f'Epoch: {epoch}, Loss: {losses.val:.4f} ({losses.avg})')
+
+                #calculate acc
+                pred = out.softmax(-1).argmax(-1)
+                accc = (pred == data.y).float().mean()
+                acc.update(accc.item())
+                print(f'Accuracy: {acc.val:.4f} ({acc.avg})')
+                print("Unique predictions ",np.unique(pred.cpu(),return_counts=True))
+                print("Unique labels ",np.unique(data.y.cpu(),return_counts=True))
+                #save results in text file
+                f.write(f'Epoch: {epoch}, Loss: {losses.val:.4f} ({losses.avg}), Accuracy: {acc.val:.4f} ({acc.avg})\n')
+        f.close()
+                
+        #validation
+        print("validation")
+        #init average meters 
+        val_losses = AverageMeter()
+        val_acc = AverageMeter()
+        for valid_data in tqdm(valid_loader,desc="validation",total=len(valid_loader)):
+            loss,out = valid(valid_data)
             pred = out.softmax(-1).argmax(-1)
-            accc = (pred == data.y).float().mean()
-            acc.update(accc.item())
-            print(f'Accuracy: {acc.val:.4f} ({acc.avg})')
-            print("Unique predictions ",np.unique(pred.cpu(),return_counts=True))
-            print("Unique labels ",np.unique(data.y.cpu(),return_counts=True))
-            #save results in text file
-            f.write(f'Epoch: {epoch}, Loss: {losses.val:.4f} ({losses.avg}), Accuracy: {acc.val:.4f} ({acc.avg})\n')
-    f.close()
-            
-    #validation
-    print("validation")
-    #init average meters 
-    val_losses = AverageMeter()
-    val_acc = AverageMeter()
-    for valid_data in tqdm(valid_loader,desc="validation",total=len(valid_loader)):
-        loss,out = valid(valid_data)
-        pred = out.softmax(-1).argmax(-1)
-        accc = (pred == valid_data.y).float().mean()
-        #add to average meters
-        val_losses.update(loss.item())
-        val_acc.update(accc.item())
-            
-    #log train and valid results on the same line to csv
-    with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","a") as f:
-        f.write(f'{epoch},{losses.avg},{acc.avg},{val_losses.avg},{val_acc.avg}\n')
+            accc = (pred == valid_data.y).float().mean()
+            #add to average meters
+            val_losses.update(loss.item())
+            val_acc.update(accc.item())
+                
+        #log train and valid results on the same line to csv
+        with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","a") as f:
+            f.write(f'{epoch},{losses.avg},{acc.avg},{val_losses.avg},{val_acc.avg}\n')
 
 
+#catch if crah and delet csv and txt file only if it has less than 5 epochs
+
+except:
+    #print stack trace
+    import traceback
+    traceback.print_exc()
+    #delete csv and txt file if it has less than 5 epochs
+    if epoch < 5:
+        os.remove(f"/home/uz1/projects/GCN/{log_file_name}.csv")
+        os.remove(f"/home/uz1/projects/GCN/{log_file_name}.txt")

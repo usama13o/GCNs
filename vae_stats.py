@@ -19,6 +19,7 @@ args.add_argument("--lr", type=float, default=0.001)
 args.add_argument("--weight_decay", type=float, default=0.0)
 args.add_argument("--train",type=bool,default=False)
 args.add_argument("--dataset",type=str,default="")
+args.add_argument("--limit",type=int,default=3000)
 
 args = args.parse_args()
 print(args._get_args())
@@ -338,8 +339,8 @@ if args.dataset == "wss":
 if args.dataset == "pcam":
     data_128 = data
     data_128.transform = transform
-    data_128.limit=3000
-loader = DataLoader(data_128, batch_size=32, drop_last=True, num_workers=16)
+    data_128.limit=args.limit
+loader = DataLoader(data_128, batch_size=args.batch_size, drop_last=True, num_workers=16)
 
 
 
@@ -587,7 +588,7 @@ class KDataset(Dataset):
 
 from torch_geometric.loader import DataLoader as GraphDataLoader
 ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_labels=True)
-train_loader =GraphDataLoader(ImData, batch_size=32, shuffle=True, num_workers=0)
+train_loader =GraphDataLoader(ImData, batch_size=args.batch_size, shuffle=True, num_workers=0)
 
 valid_dataset= HDF5Dataset("/home/uz1/DATA!/pcam/pcam/validation_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_valid_y.h5",limit=10000,transform=transform)
 ImData_valid = ImageTOGraphDataset(data=valid_dataset,vae=vae,kmeans=k)
@@ -688,28 +689,33 @@ from torch.functional import F
 
 # calculate the occurence of each cluster assignment and the taragets for each cluster
 m=8
-cluisters = np.zeros(m)
+clusters = np.zeros(m)
 #init one for each class 1 , 0 
 clusters_0 = np.zeros(m)
 clusters_1 = np.zeros(m)
-#coutn each class
+#count each class
 count_0 = 0
 count_1 = 0
+# create a csv with the target and each cluster count per image
+csv = open("./projects/GCN/clusters.csv","w")
+#init the csv
+csv.write("target, cluster_0, cluster_1, cluster_2, cluster_3, cluster_4, cluster_5, cluster_6, cluster_7\n")
 for data in tqdm(train_loader):
     for k,i in enumerate(data.y[1]):
-        cluisters[i]+=1
-        if data.y[0][k].item() ==0:
-            clusters_0[i]+=1
-            count_0+=1
-        else:
-            clusters_1[i]+=1
-            count_1+=1
+        idx,count=np.unique(np.array(i),return_counts=True)
+        clusters[idx]=count
 
+    #write to csv target , cluster 1, cluster 2, cluster 3, cluster 4, cluster 5, cluster 6, cluster 7, cluster 8
+        csv.write(f"{data.y[0][k]}, {clusters[0]}, {clusters[1]}, {clusters[2]}, {clusters[3]}, {clusters[4]}, {clusters[5]}, {clusters[6]}, {clusters[7]}")
+        csv.write("\n")
+    #reset clusters
+        clusters = np.zeros(m)
+csv.close()
 # create bar graph of the occurence of each cluster with the target for each cluster
 
 import matplotlib.pyplot as plt
 
-plt.bar(range(m),cluisters,color='b')
+plt.bar(range(m),clusters,color='b')
 plt.xticks(range(m),range(m))
 plt.title('Occurence of each cluster')
 # save
@@ -738,3 +744,14 @@ plt.xticks(range(2),['class 0','class 1'])
 plt.title('Occurence of each class')
 # save
 plt.savefig("./class_occurence.png")
+# %%
+
+import pandas as pd
+import seaborn as sns
+ 
+df=pd.read_csv('/home/uz1/projects/GCN/clusters.csv')
+
+sns.set(rc = {'figure.figsize':(16,8)})
+map = sns.heatmap(df.corr(), annot = True, fmt='.2g',cmap= 'coolwarm')
+#save
+map.figure.savefig("/home/uz1/projects/GCN/clusters.png")
