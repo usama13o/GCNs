@@ -1,4 +1,5 @@
 # %%
+import pickle
 import time
 import pytorch_lightning as pl
 from torch import nn
@@ -14,12 +15,13 @@ import argparse
 
 args = argparse.ArgumentParser()
 args.add_argument("--batch_size", type=int, default=8, help="size of the batches")
-args.add_argument("--epochs", type=int, default=100)
+args.add_argument("--epochs", type=int, default=1000)
 args.add_argument("--lr", type=float, default=0.001)
 args.add_argument("--weight_decay", type=float, default=0.0)
 args.add_argument("--train",type=bool,default=False)
 args.add_argument("--dataset",type=str,default="")
 args.add_argument("--k", type=int, default=8)
+args.add_argument("--model",type=str,default="GCN")
 
 args = args.parse_args()
 
@@ -269,6 +271,7 @@ class HDF5Dataset(data.Dataset):
 from torchvision import transforms
 from torch.utils.data import DataLoader
 
+from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
 transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.RandomResizedCrop((32, 32)),
@@ -280,10 +283,13 @@ if args.dataset == "wss":
 elif args.dataset == "pcam":
     data = HDF5Dataset("/home/uz1/DATA!/pcam/pcam/training_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_train_y.h5",transform=transform)
 if args.dataset == 'medmnist-path':
-    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
     data = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+if args.dataset == 'medmnist-derma':
+    data = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+if args.dataset == 'medmnist-blood':
+    data = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
 else:
-    raise ValueError("Dataset not supported")
+    raise ValueError("Dataset not supported", args.dataset)
 loader = DataLoader(data, batch_size=32, drop_last=True, num_workers=16)
 
 
@@ -305,7 +311,7 @@ lr_monitor = LearningRateMonitor(logging_interval="epoch")
 callbacks.append(lr_monitor)
 
 # save checkpoint on last epoch only
-ckpt = ModelCheckpoint("/home/uz1/projects/GCN/logging/",
+ckpt = ModelCheckpoint(f"/home/uz1/projects/GCN/logging/",
                        monitor="elbo",
                        save_weights_only=True)
 callbacks.append(ckpt)
@@ -333,7 +339,12 @@ if args.train:
 # %%
 
 vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
-
+if args.dataset == "medmnist-path":
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=128-step=45278.ckpt")
+if args.dataset == "medmnist-derma":
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/DermaMNIST/epoch=378-step=10232.ckpt")
+if args.dataset == "medmnist-blood":
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/BloodMNIST/epoch=486-step=22401.ckpt")
 # 
 
 #load images to be patched 
@@ -356,11 +367,33 @@ if args.dataset == "pcam":
     data_128.transform = transform
     data_128.limit=30000
     valid_dataset= HDF5Dataset("/home/uz1/DATA!/pcam/pcam/validation_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_valid_y.h5",limit=10000,transform=transform)
+    if args.k == 4:
+        with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
+            k = pickle.load(f)
+    elif args.k == 8:
+        with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
+            k = pickle.load(f)
 if args.dataset == 'medmnist-path':
     n_classes=9
     from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
     data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    with open("kmeans-model-8-medmnist-path.pkl", "rb") as f:
+        k = pickle.load(f)
+if args.dataset == 'medmnist-derma':
+    from medmnist.dataset import DermaMNIST
+    data_128 = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    n_classes = 7
+    with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-derma.pkl", "rb") as f:
+        k = pickle.load(f)
+if args.dataset == 'medmnist-blood':
+    from medmnist.dataset import BloodMNIST
+    data_128 = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    n_classes = 8
+    with open("/home/uz1/projects/GCN/kmeans-model-7-medmnist-blood.pkl", "rb") as f:
+        k = pickle.load(f)
 loader = DataLoader(data_128, batch_size=32, drop_last=True, num_workers=16)
 
 
@@ -376,17 +409,10 @@ import numpy as np
 from torchvision.utils import make_grid
 from skimage import graph, io, segmentation, color
 from matplotlib import pyplot as plt
-import pickle
 from torch_geometric.utils import to_dense_adj, grid,dense_to_sparse
 from monai.data import GridPatchDataset, DataLoader, PatchIter
 patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
 #patching each image
-if args.k == 4:
-    with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
-        k = pickle.load(f)
-elif args.k == 8:
-    with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
-        k = pickle.load(f)
 pil = ToPILImage()
 to_tensor=ToTensor()
 def get_embedding_vae(x,vae):
@@ -405,7 +431,7 @@ def populateS(labels,n_clusters=8,s=None):
     shape : ( number of patches , number of clusters)
     """
     # print("S is " ,s==None)
-    n_patches=len(label)
+    n_patches=len(labels)
     div = int(sqrt(n_patches))
     if s == None: 
         s = np.zeros((n_patches,n_clusters))
@@ -689,7 +715,7 @@ class GCN(torch.nn.Module):
         self.classifier = Linear(16, n_classes)
         # self.gat = PNA(1024,512,6,2,True,edge_dim=-1)
 
-    def forward(self, x, edge_index,edge_attr=None,batch=None):
+    def forward(self, x, edge_index,batch=None,edge_attr=None,):
         h = self.conv1(x, edge_index,edge_attr)
         h = h.relu()
         h = self.conv2(h, edge_index,edge_attr)
@@ -711,9 +737,44 @@ class GCN(torch.nn.Module):
         return out#, h
 from torch_geometric.nn.models import GAT, PNA
 
-model = GCN(n_classes=n_classes)
-# model = GAT(1024,512,6,2,True)
+from torch_geometric.nn.models import GraphSAGE,GIN,GAT
+class GCN_model(torch.nn.Module):
+    '''
+    Can add edge_atttr using the second out of dense_to_sparse
+    '''
+    def __init__(self,n_classes=3,model=None):
+        super().__init__()
+        torch.manual_seed(1234)
+        
+        self.model = model
+        self.classifier = Linear(model.out_channels, n_classes)
+
+    def forward(self, x, edge_index,batch,*args,**kwargs):
+        h = self.model(x, edge_index)
+        # h = h.tanh()  # Final GNN embedding space.
+        h = global_mean_pool(h,batch)  # [batch_size, hidden_channels]
+
+        # Apply a final (linear) classifier.
+        out = self.classifier(h)
+
+        return out#, h
+if args.model == 'gcn-sage':
+    model = GraphSAGE(1024,512,6,32,dropout=0.5)
+    model = GCN_model(n_classes,model)
+elif args.model == 'gcn-gin':
+    model = GIN(1024,512,6,32,dropout=0.5)
+    model = GCN_model(n_classes,model)
+elif args.model == 'gcn-gat':
+    model = GAT(1024,512,6,32,dropout=0.5)
+    model = GCN_model(n_classes,model)
+# elif args.model == 'gcn-edge':
+#     model = EdgeCNN(1024,512,6,32,dropout=0.5)
+#     model = GCN_model(n_classes,model)
+else:
+    model = GCN(n_classes=n_classes)
 print(model)
+
+# print all configuratio chosen 
 
 #move to gpu if available
 if torch.cuda.is_available():
@@ -730,37 +791,45 @@ from torch_geometric.nn.models import GraphUNet
 from torch.functional import F
 # model = GraphUNet(9,128,2,4,act=F.tanh)
 criterion = torch.nn.CrossEntropyLoss()  # Define loss criterion.
-optimizer = torch.optim.Adam(model.parameters(), lr=0.0001)  # Define optimizer.
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)  # Define optimizer.
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                         mode='min',
+                                                         factor=0.2,
+                                                         patience=4,
+                                                         min_lr=5e-5,verbose=True)
 data_laoder = train_loader
 def train(data):
     optimizer.zero_grad()  # Clear gradients.
     # move gpu
     data.to(device)
-    out = model(data.x, data.edge_index,data.edge_attr.float(),data.batch)#,data.edge_weight.float())  # Perform a single forward pass.
+    out = model(data.x, data.edge_index,data.batch,data.edge_attr.float())#,data.edge_weight.float())  # Perform a single forward pass.
     # print(torch.tensor(data.y).shape)
     loss = criterion(out.softmax(-1), data.y)  # Compute the loss solely based on the training nodes.
     loss.backward()  # Derive gradients.
-    optimizer.step()  # Update parameters based on gradients.
+    optimizer.step()
     return loss,out
 def valid(data):
     optimizer.zero_grad()  # Clear gradients.
     data.to(device)
-    out = model(data.x, data.edge_index,data.edge_attr.float(),data.batch)#,data.edge_weight.float())  # Perform a single forward pass.
+    out = model(data.x, data.edge_index,data.batch,data.edge_attr.float())#,data.edge_weight.float())  # Perform a single forward pass.
     loss = criterion(out.softmax(-1), data.y)  # Compute the loss solely based on the training nodes.
     return loss,out
 
+#make dir if not there 
+if not os.path.exists(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/"):
+    os.mkdir(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/")
 try:
     # init csv for metric log 
-    with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","w") as f:
+    with open(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/{log_file_name}.csv","w") as f:
         f.write("epoch,loss,accuracy,val_loss,val_accuracy\n")
 
-    for epoch in range(1000):
+    for epoch in range(args.epochs):
         # track using tqdm
         tqdm_bar = tqdm(data_laoder)
         losses = AverageMeter()
         acc = AverageMeter()
         for i,data in enumerate(tqdm_bar):
-            f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","a")
+            f = open(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/{log_file_name}.txt","a")
 
             loss,out = train(data)
             if i % 500 == 0:
@@ -785,6 +854,7 @@ try:
         val_acc = AverageMeter()
         for valid_data in tqdm(valid_loader,desc="validation",total=len(valid_loader)):
             loss,out = valid(valid_data)
+            scheduler.step(loss)  # Update parameters based on gradients.
             pred = out.softmax(-1).argmax(-1)
             accc = (pred == valid_data.y).float().mean()
             #add to average meters
@@ -792,7 +862,7 @@ try:
             val_acc.update(accc.item())
                 
         #log train and valid results on the same line to csv
-        with open(f"/home/uz1/projects/GCN/{log_file_name}.csv","a") as f:
+        with open(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/{log_file_name}.csv","a") as f:
             f.write(f'{epoch},{losses.avg},{acc.avg},{val_losses.avg},{val_acc.avg}\n')
 
 
@@ -803,6 +873,6 @@ except:
     import traceback
     traceback.print_exc()
     #delete csv and txt file if it has less than 5 epochs
-    if epoch < 5:
-        os.remove(f"/home/uz1/projects/GCN/{log_file_name}.csv")
-        os.remove(f"/home/uz1/projects/GCN/{log_file_name}.txt")
+    if epoch < 3:
+        os.remove(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/{log_file_name}.csv")
+        os.remove(f"/home/uz1/projects/GCN/{model.model.__class__.__name__}/{log_file_name}.txt")

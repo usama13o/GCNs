@@ -404,3 +404,110 @@ def open_image_np(path):
     im = open_image(path)
     array = np.array(im)
     return array
+
+
+# combine multiple datasets into one Class 
+from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+from medmnist.dataset import MedMNIST2D
+class combined_medinst_dataset(MedMNIST2D):
+    def __init__(self, root="",split="train",transform=None,no_dataset=11,limit=None):
+        # load the datasets
+        self.transform =transform
+        self.limit = limit
+        pathmnist = PathMNIST(split=split, root=root)
+        breastmnist = BreastMNIST(split=split,root=root)
+        octmnist = OCTMNIST(split=split, root=root)
+        chestmnist = ChestMNIST(split=split,root=root)
+        pneumoniamnist = PneumoniaMNIST(split=split, root=root)
+        dermamnist = DermaMNIST(split=split, root=root)
+        retinamnist = RetinaMNIST(split=split, root=root)
+        bloodmnist = BloodMNIST(split=split, root=root)
+        organA = OrganAMNIST(split=split, root=root)
+        organC = OrganCMNIST(split=split, root=root)
+        organS = OrganSMNIST(split=split, root=root)
+        tissueMnist = TissueMNIST(split=split, root=root,download=True)
+        datasets = [pathmnist,breastmnist,octmnist,chestmnist,pneumoniamnist,dermamnist,retinamnist,bloodmnist,organA,organC,organS,tissueMnist]
+        self.datasets = datasets
+        self.tot  = sum(len(d) for d in self.datasets)
+        if limit is not None:
+            self.d = []
+            ex=0
+            for d in self.datasets:
+                if int(limit / no_dataset) > len(d):# if the limit is greater than the dataset
+                    self.d.append(len(d))
+                    self.d[ex] +=(int(limit / no_dataset) - len(d))
+                else:
+                    self.d.append(int(limit / no_dataset))
+            print("Datasets split -- > ",self.d)
+        else:
+            self.d = [len(d) for d in self.datasets]
+        #create e dictionary mapping between the dataset index in datasets and the class index in the combined dataset
+        class_index = {}
+        for i,d in enumerate(datasets):
+            for j in range(len(d.info['label'])):
+                class_index[i,j] = sum(len(d.info['label']) for d in datasets[:i]) + j
+        self.class_index = class_index
+        print(self.class_index)
+
+    def __getitem__(self, i):
+        #based on i and total number of samples in all datasets, determine which dataset to get the sample from
+        for y,d in enumerate(self.datasets):
+            # print("looking in dataset",d," for sample",i)
+            if i < self.d[y]:
+                # print("Debug ----> ",i,self.d,d)
+                x,z = d[i]
+                if len(z) > 1:
+                    z =  np.array(0) if sum(z) == 0 else np.array(1)
+                # if image in index 1 has 1 channel, repeat it 3 times then reutrn it
+                if x.mode == 'L':
+                    return self.transform(x.convert("RGB")), self.class_index[(y,int(z))]
+                return self.transform(x), self.class_index[(y,int(z))]
+            i -= self.d[y]
+        raise IndexError('index out of range')
+
+    def __len__(self):
+        if self.limit is not None:
+            return self.limit
+        #sum of all the lengths of the datasets
+        return self.tot
+
+class ConcatDataset(data.Dataset):
+    """Dataset to concatenate multiple datasets.
+
+    Args:
+        datasets (sequence): List of datasets to be concatenated
+    """
+
+    def __init__(self, datasets):
+        self.datasets = datasets
+
+    def __getitem__(self, i):
+        for d in self.datasets:
+            
+            if i < len(d):
+                return d[i]
+            i -= len(d)
+        raise IndexError('index out of range')
+
+    def __len__(self):
+        return sum(len(d) for d in self.datasets)
+
+
+class ImageFolder2(ImageFolder):
+    "same as ImageFolder but with limit to the number of classes,assumes equally distributed number of iamges per class"
+    def __init__(
+            self,
+            root: str,
+            transform = None,
+            target_transform = None,
+            is_valid_file= None,
+            limit = None,
+    ):
+        super(ImageFolder2, self).__init__(root,
+                                          transform=transform,
+                                          target_transform=target_transform,
+                                          is_valid_file=is_valid_file)
+        # limit the classes in self.samples to the number of classes in self.limit
+        if limit is not None:
+            self.samples = [s for s in self.samples if s[1] < limit]
+            self.targets = [s[1] for s in self.samples]

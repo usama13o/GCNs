@@ -20,6 +20,7 @@ args.add_argument("--weight_decay", type=float, default=0.0)
 args.add_argument("--train",type=bool,default=False)
 args.add_argument("--dataset",type=str,default="")
 args.add_argument("--limit",type=int,default=3000)
+args.add_argument("--k",type=str,default="")
 
 args = args.parse_args()
 print(args._get_args())
@@ -269,6 +270,9 @@ if args.dataset == "wss":
                          transform)
 elif args.dataset == "pcam":
     data = HDF5Dataset("/home/uz1/DATA!/pcam/pcam/training_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_train_y.h5",transform=transform)
+if args.dataset == 'medmnist-path':
+    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+    data = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
 else:
     raise ValueError("Dataset not supported")
 loader = DataLoader(data, batch_size=32, drop_last=True, num_workers=16)
@@ -321,6 +325,8 @@ if args.train:
 
 vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
 
+if args.dataset == "medmnist-path":
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=128-step=45278.ckpt")
 # 
 
 #load images to be patched 
@@ -340,6 +346,13 @@ if args.dataset == "pcam":
     data_128 = data
     data_128.transform = transform
     data_128.limit=args.limit
+if args.dataset == 'medmnist-path':
+    n_classes=9
+    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+    data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+
+
 loader = DataLoader(data_128, batch_size=args.batch_size, drop_last=True, num_workers=16)
 
 
@@ -362,6 +375,20 @@ patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
 #patching each image
 with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
     k = pickle.load(f)
+if args.k=="algo":
+    with open("/home/uz1/projects/GCN/algoC-model-16-medmnist-path.pkl", "rb") as f:
+        k = pickle.load(f)
+elif args.k == 4:
+    with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
+        k = pickle.load(f)
+elif args.k == 8:
+    if args.dataset == "medmmnist-path":
+        
+        with open("kmeans-model-8-medmnist-path.pkl", "rb") as f:
+            k = pickle.load(f)
+    else:
+        with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
+            k = pickle.load(f)
 pil = ToPILImage()
 to_tensor=ToTensor()
 def get_embedding_vae(x,vae):
@@ -688,7 +715,7 @@ from torch.functional import F
 
 
 # calculate the occurence of each cluster assignment and the taragets for each cluster
-m=8
+m=16
 clusters = np.zeros(m)
 #init one for each class 1 , 0 
 clusters_0 = np.zeros(m)
@@ -699,14 +726,14 @@ count_1 = 0
 # create a csv with the target and each cluster count per image
 csv = open("./projects/GCN/clusters.csv","w")
 #init the csv
-csv.write("target, cluster_0, cluster_1, cluster_2, cluster_3, cluster_4, cluster_5, cluster_6, cluster_7\n")
+csv.write("target," + " ".join(str(i) for i in range(m)) +"\n")
 for data in tqdm(train_loader):
     for k,i in enumerate(data.y[1]):
         idx,count=np.unique(np.array(i),return_counts=True)
         clusters[idx]=count
 
-    #write to csv target , cluster 1, cluster 2, cluster 3, cluster 4, cluster 5, cluster 6, cluster 7, cluster 8
-        csv.write(f"{data.y[0][k]}, {clusters[0]}, {clusters[1]}, {clusters[2]}, {clusters[3]}, {clusters[4]}, {clusters[5]}, {clusters[6]}, {clusters[7]}")
+        csv.write(str(data.y[0][k]) +" ,".join(str(clusters[i]) for i in range(len(clusters))) +"\n")
+
         csv.write("\n")
     #reset clusters
         clusters = np.zeros(m)
