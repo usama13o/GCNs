@@ -24,7 +24,7 @@ class TestReconCallback_vae(pl.Callback):
         self.input_imgs = input_imgs
         self.every_n_epochs = every_n_epochs # Only save those images every N epochs (otherwise tensorboard gets quite large)
         
-    def on_epoch_end(self, trainer, pl_module):
+    def on_train_epoch_end(self, trainer, pl_module):
         '''
         Here we ...
         '''

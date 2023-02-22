@@ -36,6 +36,8 @@ f.close()
     # with open(fname, 'a') as f:
         # f.write(string+"\n")
 class VAE(pl.LightningModule):
+
+    
     def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
         super().__init__()
 

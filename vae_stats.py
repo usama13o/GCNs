@@ -339,19 +339,36 @@ transform = transforms.Compose([
     transforms.ConvertImageDtype(torch.float),
     transforms.Resize((128,128)),
 ])
-if args.dataset == "wss":
-    data_128 = wss_dataset_class("/home/uz1/data/wsss/train/1.training", 'all',
-                         transform)
-if args.dataset == "pcam":
-    data_128 = data
-    data_128.transform = transform
-    data_128.limit=args.limit
-if args.dataset == 'medmnist-path':
+if args.dataset == 'pathmnist':
     n_classes=9
     from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
     data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
-
+    with open("kmeans-model-8-medmnist-path.pkl", "rb") as f:
+        k = pickle.load(f)
+    if args.k == 16:
+        with open("kmeans-model-16-pathmnist.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k==32:
+        with open("kmeans-model-32-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k ==128:
+        with open("kmeans-model-128-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+if args.dataset == 'medmnist-derma':
+    from medmnist.dataset import DermaMNIST
+    data_128 = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    n_classes = 7
+    with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-derma.pkl", "rb") as f:
+        k = pickle.load(f)
+if args.dataset == 'medmnist-blood':
+    from medmnist.dataset import BloodMNIST
+    data_128 = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
+    valid_dataset = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    n_classes = 8
+    with open("/home/uz1/projects/GCN/kmeans-model-7-medmnist-blood.pkl", "rb") as f:
+        k = pickle.load(f)
 
 loader = DataLoader(data_128, batch_size=args.batch_size, drop_last=True, num_workers=16)
 
@@ -373,22 +390,22 @@ from torch_geometric.utils import to_dense_adj, grid,dense_to_sparse
 from monai.data import GridPatchDataset, DataLoader, PatchIter
 patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
 #patching each image
-with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
-    k = pickle.load(f)
-if args.k=="algo":
-    with open("/home/uz1/projects/GCN/algoC-model-16-medmnist-path.pkl", "rb") as f:
-        k = pickle.load(f)
-elif args.k == 4:
-    with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
-        k = pickle.load(f)
-elif args.k == 8:
-    if args.dataset == "medmmnist-path":
+# with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
+#     k = pickle.load(f)
+# if args.k=="algo":
+#     with open("/home/uz1/projects/GCN/algoC-model-16-medmnist-path.pkl", "rb") as f:
+#         k = pickle.load(f)
+# elif args.k == 4:
+#     with open("/home/uz1/projects/GCN/kmeans-model-4.pkl", "rb") as f:
+#         k = pickle.load(f)
+# elif args.k == 8:
+#     if args.dataset == "medmmnist-path":
         
-        with open("kmeans-model-8-medmnist-path.pkl", "rb") as f:
-            k = pickle.load(f)
-    else:
-        with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
-            k = pickle.load(f)
+#         with open("kmeans-model-8-medmnist-path.pkl", "rb") as f:
+#             k = pickle.load(f)
+#     else:
+#         with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
+#             k = pickle.load(f)
 pil = ToPILImage()
 to_tensor=ToTensor()
 def get_embedding_vae(x,vae):

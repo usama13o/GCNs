@@ -16,3 +16,5 @@ checkpoint
 
 cifar-10-batches-py/*
 *.cpkt
+db.sqlite3
+CV-Backbones

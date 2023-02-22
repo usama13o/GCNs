@@ -11,6 +11,15 @@ from pl_bolts.models.autoencoders.components import (
 )
 import torch
 
+import torch.utils.data as data
+import numpy as np
+import datetime
+from os import listdir
+import random
+from os.path import join
+from os.path import basename
+from PIL import Image
+import h5py
 
 import argparse
 
@@ -19,21 +28,23 @@ args.add_argument("--batch_size", type=int, default=128, help="size of the batch
 args.add_argument("--epochs", type=int, default=1000)
 args.add_argument("--lr", type=float, default=0.001)
 args.add_argument("--weight_decay", type=float, default=0.0)
-args.add_argument("--train",type=bool,default=False)
-args.add_argument("--dataset",type=str,default="")
+args.add_argument("--train", type=bool, default=False)
+args.add_argument("--dataset", type=str, default="")
 args.add_argument("--k", type=int, default=8)
-args.add_argument("--model",type=str,default="GCN")
+args.add_argument("--model", type=str, default="GCN")
 args.add_argument("--vae_input_h", type=int, default=32, help="input height for the vae")
 args.add_argument("--nclusters", type=int, default=8)
-args.add_argument("-size","--image_transform_size",type=int,default=128)
+args.add_argument("-size", "--image_transform_size", type=int, default=128)
+args.add_argument("-use-comb-vae","--use_combined", type=bool, default=False)
+args.add_argument("-pz","--patch_size", type=int, default=0)
 args = args.parse_args()
 
-#log file name  - date and time
+# log file name  - date and time
 log_file_name = "vae_log_k-" + str(args.k) + "_" + time.strftime("%Y%m%d-%H%M%S")
-#init log file txt
+# init log file txt
 f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","w")
 f.close()
-#modify print to be log to txt (Doesn't seem to do the trick !)
+# modify print to be log to txt (Doesn't seem to do the trick !)
 class VAE(pl.LightningModule):
     def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
         super().__init__()
@@ -129,92 +140,17 @@ class VAE(pl.LightningModule):
 #
 
 # %%
-import torch.utils.data as data
-import numpy as np
-import datetime
-from os import listdir
-import random
-from os.path import join
-from os.path import basename
-from PIL import Image
-import h5py
+class DivideIntoPatches:
+    def __init__(self, patch_size):
+        self.patch_size = patch_size
 
-class wss_dataset_class(data.Dataset):
-    def __init__(self,
-                 root_dir,
-                 split,
-                 transform=None,
-                 preload_data=False,
-                 train_pct=0.8,
-                 balance=True):
-        super(wss_dataset_class, self).__init__()
-        #train dir
-        img_dir = root_dir
-
-        self.image_filenames = sorted(
-            [join(img_dir, x) for x in listdir(img_dir) if is_image_file(x)])
-        self.target_filenames = [
-            list(
-                map(int, [
-                    x.split('-')[-1][:-4][1],
-                    x.split('-')[-1][:-4][4],
-                    x.split('-')[-1][:-4][7]
-                ])) for x in self.image_filenames
-        ]
-        sp = self.target_filenames.__len__()
-        sp = int(train_pct * sp)
-        # random.shuffle(self.image_filenames)
-        if split == 'train':
-            self.image_filenames = self.image_filenames[:sp]
-        elif split == 'all':
-            self.image_filenames = self.image_filenames
-        else:
-            self.image_filenames = self.image_filenames[sp:]
-            # find the mask for the image
-            self.target_filenames = self.target_filenames[sp:]
-            print(len(self.target_filenames))
-        print('Number of {0} images: {1} patches'.format(
-            split, self.__len__()))
-        assert len(self.image_filenames) == len(self.target_filenames)
-
-        # report the number of images in the dataset
-
-        # data augmentation
-        self.transform = transform
-
-        # data load into the ram memory
-        self.preload_data = preload_data
-        if self.preload_data:
-            print('Preloading the {0} dataset ...'.format(split))
-            self.raw_images = [
-                open_image_np(ii)[0] for ii in self.image_filenames
-            ]
-            print('Loading is done\n')
-
-    def __getitem__(self, index):
-        # update the seed to avoid workers sample the same augmentation parameters
-        np.random.seed(datetime.datetime.now().second +
-                       datetime.datetime.now().microsecond)
-        target = self.target_filenames[index]
-        if sum(target) == 2:
-            target = 0#3
-        else:
-            target = np.array(target).argmax()
-        # load the nifti images
-        if not self.preload_data:
-            input = open_image_np(self.image_filenames[index])
-        else:
-            input = np.copy(self.raw_images[index])
-
-        # handle exceptions
-        if self.transform:
-            input = self.transform(input)
-
-        return input, target
-
-    def __len__(self):
-        return len(self.image_filenames)
-
+    def __call__(self, img):
+        height, width = img.shape[-2:]
+        patches = []
+        for i in range(0, height - self.patch_size + 1, self.patch_size):
+            for j in range(0, width - self.patch_size + 1, self.patch_size):
+                patches.append(img[ :, i:i + self.patch_size, j:j + self.patch_size])
+        return torch.stack(patches, dim=0)
 
 def is_image_file(filename):
     return any(
@@ -276,6 +212,7 @@ from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,Pneumoni
 from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
 from callbacks import TestReconCallback_vae
 import os
+import glob
 
 callbacks = []
 lr_monitor = LearningRateMonitor(logging_interval="epoch")
@@ -297,25 +234,38 @@ vae = VAE(input_height=args.vae_input_h, latent_dim=1024)
 # %%
 
 vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
-if args.dataset == "medmnist-path":
-    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=128-step=45278.ckpt")
-if args.dataset == "medmnist-derma":
+if args.dataset == "pathmnist":
+    if args.patch_size ==32:
+        vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/epoch=7-step=89992.ckpt")
+    if args.patch_size ==16:
+        name = glob.glob("/home/uz1/projects/GCN/logging/PathMNIST/16/*")[-1]
+        print("VAE model path :  ",name)
+        vae = vae.load_from_checkpoint(name)
+if args.dataset == "dermamnist":
     vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/DermaMNIST/epoch=378-step=10232.ckpt")
-if args.dataset == "medmnist-blood":
+if args.dataset == "bloodmnist":
     vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/BloodMNIST/epoch=486-step=22401.ckpt")
-#
-
+if args.dataset == "combinedmnist":
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
 #load images to be patched
+
 from torchvision import transforms
 from torch.utils.data import DataLoader
 ## images as 128x128 to 16 patches (each 32x32)
+# transform = transforms.Compose([
+#     transforms.ToTensor(),
+#     # transforms.RandomResizedCrop((128,128)),
+#     transforms.ConvertImageDtype(torch.float),
+#     transforms.Resize((args.image_transform_size, args.image_transform_size)),
+# ])
+
 transform = transforms.Compose([
-    transforms.ToTensor(),
-    # transforms.RandomResizedCrop((128,128)),
-    transforms.ConvertImageDtype(torch.float),
-    transforms.Resize((args.image_transform_size,args.image_transform_size)),
-])
-print("Image TRANSFROMS #### ",transform)
+            transforms.ToTensor(),
+            transforms.Resize((args.image_transform_size, args.image_transform_size)),
+            transforms.ConvertImageDtype(torch.float),
+            DivideIntoPatches(patch_size=32), # takes an image tensor and returns a list of patches stacked as (H // patch_size **2 x H x W x C)
+        ])
+print("Image TRANSFROMS #### ", transform)
 if args.dataset == "wss":
     n_classes=4
     data_128 = wss_dataset_class("/home/uz1/data/wsss/train/1.training", 'all',
@@ -332,37 +282,110 @@ if args.dataset == "pcam":
     elif args.k == 8:
         with open("/home/uz1/projects/GCN/kmeans-model.pkl", "rb") as f:
             k = pickle.load(f)
-if args.dataset == 'medmnist-path':
+if args.dataset == 'pathmnist':
     n_classes=9
-    from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
+    from medmnist.dataset import PathMNIST
     data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
-    with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-path.pkl", "rb") as f:
+    with open("/home/uz1/projects/GCN/kmeans-model-128-32-8-PathMNIST.pkl", "rb") as f:
         k = pickle.load(f)
-    if args.nclusters==16:
-        with open("/home/uz1/projects/GCN/kmeans-model-16-pathmnist.pkl", "rb") as f:
+    if args.k==16:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-32-16-PathMNIST.pkl", "rb") as f:
             k = pickle.load(f)
-if args.dataset == 'medmnist-derma':
+    if args.k==32:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-32-32-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k ==128:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 64:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-32-64-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.patch_size != 0:
+        with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-PathMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    args.nclusters = args.k
+if args.dataset == 'dermamnist':
     from medmnist.dataset import DermaMNIST
     data_128 = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
     n_classes = 7
-    with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-derma.pkl", "rb") as f:
-        k = pickle.load(f)
-if args.dataset == 'medmnist-blood':
+    if args.k == 16:
+        with open("/home/uz1/projects/GCN/kmeans-model-16-DermaMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 32:
+        with open("/home/uz1/projects/GCN/kmeans-model-32-DermaMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 64:
+        with open("/home/uz1/projects/GCN/kmeans-model-64-DermaMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 128:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-DermaMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 8: 
+        with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-derma.pkl", "rb") as f:
+            k = pickle.load(f)
+if args.dataset == 'bloodmnist':
     from medmnist.dataset import BloodMNIST
     data_128 = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
     n_classes = 8
-    with open("/home/uz1/projects/GCN/kmeans-model-7-medmnist-blood.pkl", "rb") as f:
-        k = pickle.load(f)
+    if args.k == 16:
+        with open("/home/uz1/projects/GCN/kmeans-model-16-BloodMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 32:
+        with open("/home/uz1/projects/GCN/kmeans-model-32-BloodMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 64:
+        with open("/home/uz1/projects/GCN/kmeans-model-64-BloodMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 128:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-BloodMNIST.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 8:
+        with open("/home/uz1/projects/GCN/kmeans-model-7-medmnist-blood.pkl", "rb") as f:
+            k = pickle.load(f)
+if args.dataset == 'combinedmnist':    
+    from datasets import  combined_medinst_dataset
+    n_classes = 91
+    data_128 = combined_medinst_dataset(root='/home/uz1/DATA!/medmnist', split='train',transform=transform)
+    if args.k == 16:
+        with open("/home/uz1/projects/GCN/kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 32:
+        with open("/home/uz1/projects/GCN/kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 64:
+        with open("/home/uz1/projects/GCN/kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 128:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+
+
+        
 loader = DataLoader(data_128, batch_size=32, drop_last=True, num_workers=16)
 
 
+args.nclusters = args.k
 
+# if use_combined change Kmeans and vae to
+if args.use_combined:
+    if args.k == 16:
+        with open("/home/uz1/projects/GCN/kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 32:
+        with open("/home/uz1/projects/GCN/kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 64:
+        with open("/home/uz1/projects/GCN/kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    if args.k == 128:
+        with open("/home/uz1/projects/GCN/kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
+            k = pickle.load(f)
+    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
 
-
-
+    print("### USING COMBINED VAE AND KMEANS ###") 
 # %%
 # %%
 from torchvision.transforms import ToPILImage,ToTensor
@@ -386,25 +409,6 @@ def get_embedding_vae(x,vae):
     z = q.rsample()
     return z
 from math import sqrt
-def populateS(labels,n_clusters=8,s=None):
-    """"
-    Calculates the S cluster assigment transform of input patch features 
-    and returns the (S) and the aggregated (out_adj) as well.
-    shape : ( number of patches , number of clusters)
-    """
-    # print("S is " ,s==None)
-    n_patches=len(labels)
-    div = int(sqrt(n_patches))
-    if s == None:
-        s = np.zeros((n_patches,n_clusters))
-        for i in range(s.shape[0]):
-            s[i][labels[i]] = 1
-    else:
-        s=s
-
-    #calc adj matrix
-    adj = to_dense_adj(grid(n_patches//div,n_patches//div)[0]).reshape(n_patches,n_patches)
-    return s , np.matmul(np.matmul(s.transpose(1, 0),adj ), s)
 # %%
 # %%
 def calculate_cluster_dist_stat(label):
@@ -535,38 +539,61 @@ def filter_a(data):
     else:
         True
 
+def populateS(labels,n_clusters=8,s=None):
+    """"
+    Calculates the S cluster assigment transform of input patch features 
+    and returns the (S) and the aggregated (out_adj) as well.
+    shape : ( number of patches , number of clusters)
+    """
+    # print("S is " ,s==None)
+    n_patches=len(labels)
+    div = int(sqrt(n_patches))
+ 
+    s = np.zeros((n_patches,n_clusters))
+    s[np.arange(n_patches), labels] = 1
+         # TODO optimise this!
+
+
+    #calc adj matrix
+    adj = to_dense_adj(grid(n_patches//div,n_patches//div)[0]).reshape(n_patches,n_patches)
+    return s , np.matmul(np.matmul(s.transpose(1, 0),adj ), s)
+
+from torch_geometric.data import Data,Dataset
+from torch_geometric.utils import to_dense_adj, grid,dense_to_sparse
+
+from monai.data import GridPatchDataset, DataLoader, PatchIter
+
 class ImageTOGraphDataset(Dataset):
     """ 
     Dataset takes holds the kmaens classifier and vae encoder. On each input image we encode then get k mean label then formulate graph as Data object
     """
-    def __init__(self,data,vae,kmeans,norm_adj=True,return_x_only=None,nclusters=8):
+    def __init__(self,data,vae,kmeans,norm_adj=True,return_x_only=None):
         self.data=data
         self.vae=vae
         self.return_x_only=return_x_only
-        self.kmeans=kmeans
+
+        self.kmeans = kmeans
         self.norm_adj = norm_adj
-        self.nclusters=nclusters
-        self.patch_iter = PatchIter(patch_size=(32, 32), start_pos=(0, 0))
+
+        # if self.data[1][0].dim() >3:
+        #     self.__getitem__ = self.__getitem__patches   
+            # add attr
+
     def __len__(self):
         return len(self.data)
     def __getitem__(self,index):
 
-        patches = []
-        for x in self.patch_iter(self.data[index][0]):
-            patches.append(x[0])
-
-        patches = torch.stack([torch.tensor(np.array(patches))],0).squeeze()
-
-        z=get_embedding_vae(patches,self.vae).clone().detach().double().cpu().numpy()
+        patches = self.data[index][0]
+        z=get_embedding_vae(patches,self.vae).clone().detach().cpu().numpy()
         label=self.kmeans.predict(z)
-        s,out_adj = populateS(label,self.nclusters)
+        s,out_adj = populateS(label,self.kmeans.cluster_centers_.shape[0])
         x = np.matmul(s.transpose(1,0) , z)
         if self.return_x_only:
             return x,label,self.data[index][1]
-        #if normlaise adj
+        #if normlaise adj 
         if self.norm_adj:
             out_adj = out_adj.div(out_adj.sum(1))
-            #nan to 0 in tensor
+            #nan to 0 in tensor 
             out_adj = out_adj.nan_to_num(0)
             #assert if there is nan in tensor
             assert out_adj.isnan().any() == False , "Found nan in out_adj"
@@ -575,7 +602,7 @@ class ImageTOGraphDataset(Dataset):
 
 from torch_geometric.loader import DataLoader as GraphDataLoader
 
-ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_x_only=True,nclusters=args.nclusters)
+ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_x_only=True)
 train_loader =GraphDataLoader(ImData, batch_size=args.batch_size, shuffle=True, num_workers=0,)
 #print dataset stats
 print("Dataset stats:")
@@ -596,7 +623,13 @@ import torch
 from torch_geometric.data import Data,Dataset
 from tqdm import tqdm
 #create h5py file
-h5f = h5py.File(f'graph-data---{args.dataset}-{args.nclusters}.h5', 'w')
+if os.path.exists(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
+    print("File already exists")
+    #exit
+    exit()
+
+h5f = h5py.File(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
+
 #create dataset in file
 # h5f.create_dataset('x',(len(ImData),ImData[0].x.shape[0],ImData[0].x.shape[1]))
 # h5f.create_dataset('x', (len(ImData),ImData[1].x.shape[0],ImData[1].x.shape[1]))
