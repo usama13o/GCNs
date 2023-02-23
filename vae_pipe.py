@@ -183,7 +183,7 @@ def main(pz,im_s,bs):
         from datasets import combined_medinst_dataset
 
 
-        data = PathMNIST(root='/home/uz1/DATA!/medmnist', split='train',transform=transform)
+        data = PathMNIST(root='/home/uz1/DATA!/medmnist', split='test',transform=transform)
         loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=16)
 
 
@@ -193,6 +193,7 @@ def main(pz,im_s,bs):
         import os
         import random
         import datetime
+        from math import sqrt
 
         callbacks = []
         lr_monitor = LearningRateMonitor(logging_interval="epoch")
@@ -235,6 +236,7 @@ def main(pz,im_s,bs):
                             
                             callbacks=callbacks,strategy="dp")
             try:
+                print("Using pretrained model")
                 trainer.fit(vae, loader,val_loader)
                 print("Training finished")
             except:
@@ -250,6 +252,11 @@ def main(pz,im_s,bs):
         # vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
 
         num_points = 700 if len(data) > 20000 else len(data)
+        
+        h=int(int(data[0][0].shape[-1]) * sqrt(data[0][0].shape[0]))
+        p_z = int(sqrt((h*h) // int(data[0][0].shape[0])))
+        num_points = num_points if (((h // p_z) * (h // p_z) ) * num_points ) % 16000 == 0 else 16000 // ((h // p_z) * (h // p_z))
+
         # real test data  -  vis of means of data and class clusters
         # test = [data[x][0] for x in range(num_points)]
         # y_test = [data[x][1] for x in range(num_points)]

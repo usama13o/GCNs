@@ -263,7 +263,7 @@ transform = transforms.Compose([
             transforms.ToTensor(),
             transforms.Resize((args.image_transform_size, args.image_transform_size)),
             transforms.ConvertImageDtype(torch.float),
-            DivideIntoPatches(patch_size=32), # takes an image tensor and returns a list of patches stacked as (H // patch_size **2 x H x W x C)
+            DivideIntoPatches(patch_size=args.patch_size), # takes an image tensor and returns a list of patches stacked as (H // patch_size **2 x H x W x C)
         ])
 print("Image TRANSFROMS #### ", transform)
 if args.dataset == "wss":
@@ -538,6 +538,46 @@ def filter_a(data):
         return False
     else:
         True
+def populateSBatched(labels, n_clusters=8, s=None, n_graphs=10, n_patches=16):
+    """
+    Calculates the S cluster assignment transform of input patch features 
+    for multiple graphs and returns the S and the aggregated adjacency matrix for each graph.
+    Shape : (number of patches, number of clusters)
+
+    Args:
+        labels (ndarray): Labels for each node in each graph. Shape is (n_graphs*n_patches,)
+        n_clusters (int): Number of clusters
+        s (ndarray): Existing S assignment transform to update
+        n_graphs (int): Number of graphs
+        n_patches (int): Number of patches in each image
+
+    Returns:
+        tuple: S assignment transform and aggregated adjacency matrix for each graph
+    """
+    # n_patches = n_graphs * n_patches
+    div = int(np.sqrt(n_patches))
+
+    S_list = []
+    adj_list = []
+
+    for i in range(n_graphs):
+        start = i * n_patches
+        end = start + n_patches
+        graph_labels = labels[start:end]
+
+        s_graph = np.zeros((n_patches, n_clusters))
+        s_graph[np.arange(n_patches), graph_labels] = 1
+
+        # calc adj matrix
+        adj_graph = to_dense_adj(grid(div, div)[0]).reshape(n_patches, n_patches)
+
+        S_list.append(s_graph)
+        adj_list.append(np.matmul(np.matmul(s_graph.transpose(1, 0), adj_graph), s_graph))
+
+    S = np.concatenate(S_list)
+    adj = np.stack(adj_list)
+
+    return S, adj
 
 def populateS(labels,n_clusters=8,s=None):
     """"
@@ -563,6 +603,56 @@ from torch_geometric.utils import to_dense_adj, grid,dense_to_sparse
 
 from monai.data import GridPatchDataset, DataLoader, PatchIter
 
+
+class ImageTOGraphDatasetBatched(Dataset):
+    """ 
+    Dataset takes holds the kmaens classifier and vae encoder. On each input image we encode then get k mean label then formulate graph as Data object
+    """
+    def __init__(self,data,vae,kmeans,norm_adj=True,return_x_only=None):
+        self.data=data
+        self.vae=vae
+        self.vae.cuda()
+        self.return_x_only=return_x_only
+
+        self.kmeans = kmeans
+        self.norm_adj = norm_adj
+        self.n_patches = self.data[1][0].shape[0]
+
+        # if self.data[1][0].dim() >3:
+        #     self.__getitem__ = self.__getitem__patches   
+            # add attr
+
+    def __len__(self):
+        return len(self.data)
+    def __getitem__(self,index):
+        #given that index is a list of indeices , load the patches and get the embedding
+        # p = self.data[index][0] wont work 
+    
+        b=len(index) 
+        patches = torch.concat([self.data[i][0] for i in index],0).cuda()
+        n_graphs = patches.shape[0] // self.n_patches
+        n_clusters = self.kmeans.cluster_centers_.shape[0]
+        ys = np.concatenate([self.data[i][1] for i in index],0)
+        z=get_embedding_vae(patches,self.vae.cuda()).clone().detach().cpu().numpy()
+        label=self.kmeans.predict(z)
+        s,out_adj = populateSBatched(label,n_clusters,n_graphs=n_graphs,n_patches=self.n_patches)
+
+        z = z.reshape((b, self.n_patches, -1))
+        s = s.reshape((b,self.n_patches, n_clusters))
+
+        s = np.transpose(s,(0,2,1))
+        x = np.matmul(s, z).reshape(b,n_clusters,-1)
+        del z,s,patches
+        if self.return_x_only:
+            return torch.tensor(x),torch.tensor(label),torch.tensor(ys)
+        #if normlaise adj 
+        if self.norm_adj:
+            out_adj = out_adj.div(out_adj.sum(1))
+            #nan to 0 in tensor 
+            out_adj = out_adj.nan_to_num(0)
+            #assert if there is nan in tensor
+            assert out_adj.isnan().any() == False , "Found nan in out_adj"
+        return Data(x=torch.tensor(x).float(),edge_index=dense_to_sparse(out_adj)[0],y=torch.tensor(self.data[index][1]),edge_attr=dense_to_sparse(out_adj)[1])
 class ImageTOGraphDataset(Dataset):
     """ 
     Dataset takes holds the kmaens classifier and vae encoder. On each input image we encode then get k mean label then formulate graph as Data object
@@ -584,12 +674,14 @@ class ImageTOGraphDataset(Dataset):
     def __getitem__(self,index):
 
         patches = self.data[index][0]
-        z=get_embedding_vae(patches,self.vae).clone().detach().cpu().numpy()
+        z=get_embedding_vae(patches.cuda(),self.vae.cuda()).clone().detach().cpu().numpy()
         label=self.kmeans.predict(z)
         s,out_adj = populateS(label,self.kmeans.cluster_centers_.shape[0])
         x = np.matmul(s.transpose(1,0) , z)
+        del z
+        del s,patches
         if self.return_x_only:
-            return x,label,self.data[index][1]
+            return torch.tensor(x),torch.tensor(label),torch.tensor(self.data[index][1])
         #if normlaise adj 
         if self.norm_adj:
             out_adj = out_adj.div(out_adj.sum(1))
@@ -601,9 +693,47 @@ class ImageTOGraphDataset(Dataset):
 
 
 from torch_geometric.loader import DataLoader as GraphDataLoader
+# toech data loader 
+from torch.utils.data import DataLoader
+#import samplesr
+import torch
 
-ImData = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_x_only=True)
-train_loader =GraphDataLoader(ImData, batch_size=args.batch_size, shuffle=True, num_workers=0,)
+
+ImData = ImageTOGraphDatasetBatched(data=data_128,vae=vae,kmeans=k,return_x_only=True)
+ImData2 = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_x_only=True)
+sampler = torch.utils.data.sampler.BatchSampler(
+    torch.utils.data.sampler.RandomSampler(ImData),
+    batch_size=args.batch_size,
+    drop_last=False)
+train_loader = GraphDataLoader(ImData, batch_size=1, shuffle=False, num_workers=0,sampler = sampler)
+
+# #time how long it takes to load data 
+import time
+start = time.time()
+next(iter(train_loader))
+end = time.time()
+print("Time to load data: {}s".format(end-start))
+#how much for all data
+print("Time to load all data: {} min".format(((end-start)*len(ImData)/128)// 60))
+#test using tqdm load trhough all data
+from tqdm import tqdm
+# loop through train loader
+for i,_ in tqdm( enumerate(train_loader), total=len(train_loader)):
+    if i == 5:
+        break
+
+
+train_loader2 = GraphDataLoader(ImData2, batch_size=128, shuffle=True, num_workers=0,)
+#time how long it takes to load data
+start = time.time()
+next(iter(train_loader2))
+end = time.time()
+print("Time to load data before : {}s".format(end-start))
+print("Time to load all data: {} min".format(((end-start)*len(ImData)/128) // 60))
+for i,_ in tqdm(enumerate(train_loader2), total=len(train_loader2)):
+    if i == 5:
+        break
+
 #print dataset stats
 print("Dataset stats:")
 print("Number of graphs: {}".format(len(ImData)))
@@ -614,93 +744,54 @@ print("batch size: {}".format(train_loader.batch_size))
 # valid_loader = GraphDataLoader(ImData_valid,batch_size=16,shuffle=True,num_workers=0)
 #import dataloader from torch
 from torch.utils.data import DataLoader
-train_loader = DataLoader(ImData, batch_size=args.batch_size,)
+# train_loader = DataLoader(ImData, batch_size=args.batch_size,)
+train_loader = DataLoader(ImData, batch_size=1,sampler = sampler)
 # for all data in the dataset: create a h5y file to store the data and save to disk
 import h5py
 import os
 import numpy as np
-import torch
 from torch_geometric.data import Data,Dataset
 from tqdm import tqdm
 #create h5py file
-if os.path.exists(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
-    print("File already exists")
-    #exit
-    exit()
+# if os.path.exists(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
+#     print("File already exists at ", f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
+
+#     #exit
+#     exit()
 
 h5f = h5py.File(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
 
 #create dataset in file
-# h5f.create_dataset('x',(len(ImData),ImData[0].x.shape[0],ImData[0].x.shape[1]))
-# h5f.create_dataset('x', (len(ImData),ImData[1].x.shape[0],ImData[1].x.shape[1]))
-h5f.create_dataset('x', (len(ImData),ImData[1][0].shape[0],ImData[1][0].shape[1]))
-# h5f.create_dataset('edge_index', (len(ImData),ImData[1].edge_index.shape[0],ImData[1].edge_index.shape[1]),maxshape=(None,2,None))
-# h5f.create_dataset('edge_attr', (len(ImData),ImData[1].edge_index.shape[0]))
+
+h5f.create_dataset('x', (len(ImData),args.nclusters,vae.fc_mu.out_features))
+
 # add the data to h5py file
-n_clusters = ImData[1][0].shape[0]
-embed_size = ImData[1][0].shape[1]
+n_clusters = args.nclusters
+embed_size = vae.fc_mu.out_features
+n_patches = data_128[0][0].shape[0]
 #try numpy array
 edge_i = []
 edge_at = []
 ys=[]
 tmp=0
 for i,d in tqdm(enumerate(train_loader),total=len(train_loader)):
-    # print(ImData[i].x)
-    # print(ImData[i].x.shape)
-    # h5f["x"].resize((h5f["x"].shape[0],ImData[i].x.shape[0]), axis = 0)
-    # h5f["x"][-ImData[i].x.shape[0]:,:,:] = ImData[i].x
-    # h5f['x'][i:i+d[0].shape[0]] = d[0].reshape(-1,8,1024)
-    # move index by size of d[0].shape[0]
-    h5f['x'][tmp:tmp+d[0].shape[0]] = d[0].reshape(-1,n_clusters,embed_size)
-    tmp=tmp+d[0].shape[0]
-    print("from {} to {}".format(tmp,d[0].shape[0]+tmp))
 
+    h5f['x'][tmp:tmp+d[0].squeeze().shape[0]] = d[0].reshape(-1,n_clusters,embed_size)
+    tmp=tmp+d[0].squeeze().shape[0]
 
-    #resize for edge index
-    # h5f["edge_index"].resize((h5f["edge_index"].shape[0],ImData[i].edge_index.shape[0],ImData[i].edge_index.shape[1]), axis = 0)
-    # h5f["edge_index"][:,:,-ImData[i].edge_index.shape[1]:] = ImData[i].edge_index.numpy()
-    # h5f['edge_index'][i,:,] = ImData[i].edge_index.numpy()
-    # h5f['edge_attr'][i] = ImData[i].edge_attr.numpy()
-    # h5f['y'][i] = ImData[i].y.numpy()
-    # dst[i] = temsp[i].x.numpy()
-    # edge_i.append(ImData[i].edge_index.numpy())
-    # edge_at.append(ImData[i].edge_attr.numpy())
-    ys.append(d[2])
-    edge_i.append(d[1])
+    ys.append(d[2].squeeze())
+    edge_i.append(d[1].squeeze())
 
 edge_i = np.stack(edge_i[:-1])
 ys = np.stack(ys[:-1])
 ys = np.concatenate([ys.reshape(-1),d[2].reshape(-1)]) 
-edge_1 = np.concatenate([edge_i.reshape(-1,16),d[1].reshape(-1,16)])
-# edge_at = np.array(edge_at)
-# ys = np.array(ys)
+edge_i = np.concatenate([edge_i.reshape(-1,n_patches),d[1].reshape(-1,n_patches)])
+
 #create datasets for edge index and edge attr and ys
 h5f.create_dataset('edge_index', data=edge_i)
 h5f.create_dataset('ys', data=ys)
-# h5f.create_dataset('edge_attr', data=edge_at)
-# h5f.create_dataset('y', data=ys)
+
 #close the file
 h5f.close()
-# np.savez(fn,x=dst)
-# read the h5py file and print the data
-# h5f = h5py.File(f'graph-data--{args.dataset}.h5', 'r')
-# del dst
-# # dst = np.load(fn)
-# print(h5f['x'][0])
-# print(h5f['x'][0].shape)
-# # for i in range(5):
-# #     print(f"Data is equal at {i} : ",(h5f['x'][i] == ImData[i][0])
-#     # print(f"Data is equal at {i} : ",np.array_equal(dst['x'][i],temsp[i].x.numpy()))
-# print(h5f['x'].shape)
-
-
-# #compare shape 0 are all equal
-# print(f"Shape 0 is equal: ",(h5f['x'].shape[0] == h5f['edge_index'].shape[0]))
-# print(f"Shape 0 is equal: ",(h5f['x'].shape[0] == h5f['edge_attr'].shape[0]))
-# print(f"Shape 0 is equal: ",(h5f['x'].shape[0] == h5f['y'].shape[0]))
-
-# h5f.close()
-
-
 
 # %%
