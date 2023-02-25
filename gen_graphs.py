@@ -769,6 +769,7 @@ h5f.create_dataset('x', (len(ImData),args.nclusters,vae.fc_mu.out_features))
 n_clusters = args.nclusters
 embed_size = vae.fc_mu.out_features
 n_patches = data_128[0][0].shape[0]
+print(f"n_clusters: {n_clusters}, embed_size: {embed_size}, n_patches: {n_patches}")
 #try numpy array
 edge_i = []
 edge_at = []
