@@ -294,14 +294,14 @@ def main(pz,im_s,bs):
         h=int(int(data[0][0].shape[-1]) * sqrt(data[0][0].shape[0]))
         p_z = int(sqrt((h*h) // int(data[0][0].shape[0])))
         print("Using a VAE with h=",h,"and p(z)=",p_z)
-        for n in [8,16,32,64,128]:
+        for n in [args.patch_size]:
             k=KMeans(n_clusters=n).fit(x_em.reshape(x_em.shape[0],-1))
             k.labels_.shape 
             #count unique values + return counts
             unique, counts = np.unique(k.labels_, return_counts=True)
             print("unique values:", unique)
             print("counts:", counts)
-            with open(f"kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl", "wb") as f:
+            with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl", "wb") as f:
                 pickle.dump(k, f)
 
         # catch if error is gpu memory error then run again with reduced batch size
