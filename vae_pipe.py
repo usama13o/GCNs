@@ -302,7 +302,7 @@ def main(args):
         h = im_s
         p_z = pz
         print("Using a VAE with h=",h,"and p(z)=",p_z)
-        if os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl"):
+        if os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl"):
             print("Kmeans model already exists, skipping")
         else:
             for n in [args.num_nodes]:
@@ -345,6 +345,6 @@ if __name__ == "__main__":
 
     num_patches = (img_size // patch_size) ** 2
 
-    print("Running with config: \n patch_size: {} \n img_size: {} \n num_patches: {}\n bs: {}\n num nodes: ".format(patch_size, img_size, num_patches,args.batch_size,args.num_nodes))
+    print("Running with config: \n patch_size: {} \n img_size: {} \n num_patches: {}\n bs: {}\n num nodes:{} ".format(patch_size, img_size, num_patches,args.batch_size,args.num_nodes))
 
     main(args)
