@@ -45,6 +45,8 @@ log_file_name = "vae_log_k-" + str(args.k) + "_" + time.strftime("%Y%m%d-%H%M%S"
 f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","w")
 f.close()
 # modify print to be log to txt (Doesn't seem to do the trick !)
+
+print("init gen graphs\n with args \n", args)   
 class VAE(pl.LightningModule):
     def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
         super().__init__()
@@ -235,12 +237,10 @@ vae = VAE(input_height=args.vae_input_h, latent_dim=1024)
 
 vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
 if args.dataset == "pathmnist":
-    if args.patch_size ==32:
-        vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/epoch=7-step=89992.ckpt")
-    if args.patch_size ==16:
-        name = glob.glob("/home/uz1/projects/GCN/logging/PathMNIST/16/*")[-1]
-        print("VAE model path :  ",name)
-        vae = vae.load_from_checkpoint(name)
+    
+    name = glob.glob(f"/home/uz1/projects/GCN/logging/PathMNIST/{args.patch_size}/{args.image_transform_size}/*")[-1]
+    print("VAE model path :  ",name)
+    vae = vae.load_from_checkpoint(name)
 if args.dataset == "dermamnist":
     vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/DermaMNIST/epoch=378-step=10232.ckpt")
 if args.dataset == "bloodmnist":
@@ -753,11 +753,11 @@ import numpy as np
 from torch_geometric.data import Data,Dataset
 from tqdm import tqdm
 #create h5py file
-# if os.path.exists(f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
-#     print("File already exists at ", f'graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
+if os.path.exists(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
+    print("File already exists at ", f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
 
-#     #exit
-#     exit()
+    #exit
+    exit("File already exists")
 
 h5f = h5py.File(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
 

@@ -1,3 +1,5 @@
+
+import glob
 import torch
 import numpy as np
 import PIL.Image
@@ -6,7 +8,10 @@ import matplotlib.pyplot as plt
 
 import argparse
 
-def main(pz,im_s,bs):
+def main(args):
+    im_s  = args.img_size
+    pz = args.patch_size
+    bs = args.batch_size
     try:
 
         class DivideIntoPatches:
@@ -28,6 +33,8 @@ def main(pz,im_s,bs):
             resnet18_encoder,
         )
         import torch
+        import warnings
+        warnings.filterwarnings("ignore")
 
         class VAE(pl.LightningModule):
             def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
@@ -171,9 +178,9 @@ def main(pz,im_s,bs):
         from torch.utils.data import DataLoader
         transform = transforms.Compose([
             transforms.ToTensor(),
-            transforms.Resize((img_size, img_size)),
+            transforms.Resize((im_s, im_s)),
             transforms.ConvertImageDtype(torch.float),
-            DivideIntoPatches(patch_size=patch_size), # takes an image tensor and returns a list of patches stacked as (H // patch_size **2 x H x W x C)
+            DivideIntoPatches(patch_size=pz), # takes an image tensor and returns a list of patches stacked as (H // patch_size **2 x H x W x C)
         ])
         # data = wss_dataset_class("/home/uz1/data/wsss/train/1.training", 'all',
                                 #  transform)
@@ -201,10 +208,10 @@ def main(pz,im_s,bs):
 
         val_data= PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
         val_loader = DataLoader(val_data, batch_size=args.batch_size, drop_last=True, num_workers=16)
-        len(val_data)
 
         # save checkpoint on last epoch only
-        ckpt = ModelCheckpoint(f"/home/uz1/projects/GCN/logging/{data.__class__.__name__}/{args.patch_size}/",
+        ckpt_dir = f"/home/uz1/projects/GCN/logging/{data.__class__.__name__}/{pz}/{im_s}"
+        ckpt = ModelCheckpoint(ckpt_dir,
                             monitor="elbo",
                             save_weights_only=True)
         callbacks.append(ckpt)
@@ -227,8 +234,8 @@ def main(pz,im_s,bs):
                             #  progress_bar_refresh_rate=10,
                             
                             callbacks=callbacks,strategy="dp")
-
-        if args.use_pretrain == True:
+        
+        if args.use_pretrain == True and not os.path.exists(ckpt_dir):
             vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
             trainer = pl.Trainer(gpus=1,
                             max_epochs=1,
@@ -248,8 +255,10 @@ def main(pz,im_s,bs):
                             
                             callbacks=callbacks,strategy="dp")
                 trainer.fit(vae, loader,val_loader)
-        # vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=461-step=145529.ckpt")
-        # vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
+        else:
+            print("ckpt found at: ", ckpt_dir)
+            ckpt_dir = glob.glob(f"{ckpt_dir}/*.ckpt")[0]
+            vae = vae.load_from_checkpoint(ckpt_dir)
 
         num_points = 700 if len(data) > 20000 else len(data)
         
@@ -272,18 +281,17 @@ def main(pz,im_s,bs):
         test = torch.stack(test, 0).to(vae.device)
         if test.dim() >4:
             test = test.reshape(-1, test.shape[2], test.shape[3], test.shape[4])
-        print(test.shape)
-        if vae.__class__.__name__ == 'VAE':
-            x_encoded = vae.encoder(test)
+        print("Number of points used in Kmeans calc: ",test.shape)
 
-            mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
-            std = torch.exp(log_var / 2)
-            q = torch.distributions.Normal(mu, std)
-            z = q.rsample()
-            z=z.detach().cpu().numpy()
-            print("Done - out shape ",z.shape)
-        elif vae.__class__.__name__ == 'deeplab':
-            z = vae.encode(test)[0].detach().cpu().numpy()
+        x_encoded = vae.encoder(test)
+
+        mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
+        std = torch.exp(log_var / 2)
+        q = torch.distributions.Normal(mu, std)
+        z = q.rsample()
+        z=z.detach().cpu().numpy()
+        print("Done - out shape ",z.shape)
+
 
 
         from sklearn.cluster import KMeans
@@ -291,18 +299,21 @@ def main(pz,im_s,bs):
         import pickle
         from math import sqrt
         x_em = z
-        h=int(int(data[0][0].shape[-1]) * sqrt(data[0][0].shape[0]))
-        p_z = int(sqrt((h*h) // int(data[0][0].shape[0])))
+        h = im_s
+        p_z = pz
         print("Using a VAE with h=",h,"and p(z)=",p_z)
-        for n in [args.patch_size]:
-            k=KMeans(n_clusters=n).fit(x_em.reshape(x_em.shape[0],-1))
-            k.labels_.shape 
-            #count unique values + return counts
-            unique, counts = np.unique(k.labels_, return_counts=True)
-            print("unique values:", unique)
-            print("counts:", counts)
-            with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl", "wb") as f:
-                pickle.dump(k, f)
+        if os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl"):
+            print("Kmeans model already exists, skipping")
+        else:
+            for n in [args.num_nodes]:
+                k=KMeans(n_clusters=n).fit(x_em.reshape(x_em.shape[0],-1))
+                k.labels_.shape 
+                #count unique values + return counts
+                unique, counts = np.unique(k.labels_, return_counts=True)
+                print("unique values:", unique)
+                print("counts:", counts)
+                with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{n}-{data.__class__.__name__}.pkl", "wb") as f:
+                    pickle.dump(k, f)
 
         # catch if error is gpu memory error then run again with reduced batch size
     except RuntimeError as e:
@@ -323,6 +334,7 @@ if __name__ == "__main__":
     args.add_argument('-p','--patch_size', type=int, default=32)
     args.add_argument('-i','--img_size', type=int, default=128)
     args.add_argument('-bs','--batch_size', type=int, default=8)
+    args.add_argument('-k','--num_nodes', type=int, default=8)
     args.add_argument('-use_pretrain','--use_pretrain', type=bool, default=False)
 
     args = args.parse_args()
@@ -333,6 +345,6 @@ if __name__ == "__main__":
 
     num_patches = (img_size // patch_size) ** 2
 
-    print("Running with config: \n patch_size: {} \n img_size: {} \n num_patches: {}\n bs: {}".format(patch_size, img_size, num_patches,args.batch_size))
+    print("Running with config: \n patch_size: {} \n img_size: {} \n num_patches: {}\n bs: {}\n num nodes: ".format(patch_size, img_size, num_patches,args.batch_size,args.num_nodes))
 
-    main(args.patch_size, args.img_size,args.batch_size)
+    main(args)
