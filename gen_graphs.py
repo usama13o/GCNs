@@ -705,7 +705,7 @@ sampler = torch.utils.data.sampler.BatchSampler(
     torch.utils.data.sampler.RandomSampler(ImData),
     batch_size=args.batch_size,
     drop_last=False)
-train_loader = GraphDataLoader(ImData, batch_size=1, shuffle=False, num_workers=0,sampler = sampler)
+train_loader = GraphDataLoader(ImData, batch_size=1, shuffle=False, num_workers=24,sampler = sampler)
 
 # #time how long it takes to load data 
 import time
@@ -723,7 +723,7 @@ for i,_ in tqdm( enumerate(train_loader), total=len(train_loader)):
         break
 
 
-train_loader2 = GraphDataLoader(ImData2, batch_size=128, shuffle=True, num_workers=0,)
+train_loader2 = GraphDataLoader(ImData2, batch_size=args.batch_size, shuffle=True, num_workers=24,)
 #time how long it takes to load data
 start = time.time()
 next(iter(train_loader2))
@@ -745,7 +745,7 @@ print("batch size: {}".format(train_loader.batch_size))
 #import dataloader from torch
 from torch.utils.data import DataLoader
 # train_loader = DataLoader(ImData, batch_size=args.batch_size,)
-train_loader = DataLoader(ImData, batch_size=1,sampler = sampler)
+train_loader = DataLoader(ImData, batch_size=1,sampler = sampler,shuffle=False,num_workers=24)
 # for all data in the dataset: create a h5y file to store the data and save to disk
 import h5py
 import os
