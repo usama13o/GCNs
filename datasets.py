@@ -25,7 +25,18 @@ def open_pickled_file(fn):
 
 from utils_ae import open_image_np, open_target_get_class, open_target_get_class_with_perc 
 
+import torch
+class DivideIntoPatches:
+        def __init__(self, patch_size):
+            self.patch_size = patch_size
 
+        def __call__(self, img):
+            height, width = img.shape[-2:]
+            patches = []
+            for i in range(0, height - self.patch_size + 1, self.patch_size):
+                for j in range(0, width - self.patch_size + 1, self.patch_size):
+                    patches.append(img[ :, i:i + self.patch_size, j:j + self.patch_size])
+            return torch.stack(patches, dim=0)
 class GeoGnn(data.Dataset):
 
     def __init__(self, root, tif_root,mask_root,transform=None, target_transform=None, loader=open_image_np):

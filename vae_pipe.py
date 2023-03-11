@@ -5,7 +5,7 @@ import numpy as np
 import PIL.Image
 import matplotlib.pyplot as plt
 
-
+from datasets import DivideIntoPatches
 import argparse
 
 def main(args):
@@ -13,17 +13,7 @@ def main(args):
     pz = args.patch_size
     bs = args.batch_size
 
-    class DivideIntoPatches:
-        def __init__(self, patch_size):
-            self.patch_size = patch_size
-
-        def __call__(self, img):
-            height, width = img.shape[-2:]
-            patches = []
-            for i in range(0, height - self.patch_size + 1, self.patch_size):
-                for j in range(0, width - self.patch_size + 1, self.patch_size):
-                    patches.append(img[ :, i:i + self.patch_size, j:j + self.patch_size])
-            return torch.stack(patches, dim=0)
+    
     import pytorch_lightning as pl
     from torch import nn
     from torch.nn import functional as F
@@ -174,6 +164,20 @@ def main(args):
             })
 
             return elbo
+        # using LightningDataModule
+    class LitDataModule(pl.LightningDataModule):
+        def __init__(self, batch_size,data,val_data=None):
+            super().__init__()
+            self.save_hyperparameters()
+        # or
+            self.batch_size = batch_size
+            self.data = data
+            self.val_data = val_data
+
+        def train_dataloader(self):
+            return DataLoader(self.data, batch_size=self.batch_size, drop_last=True, num_workers=24)
+        def val_dataloader(self):
+            return DataLoader(self.val_data, batch_size=self.batch_size, drop_last=True, num_workers=24)
     from torchvision import transforms
     from torch.utils.data import DataLoader
     transform = transforms.Compose([
@@ -196,9 +200,9 @@ def main(args):
     loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=24)
 
 
-
     from pytorch_lightning.callbacks import LearningRateMonitor, ModelCheckpoint
     from callbacks import  TestReconCallback_vae,TestReconCallback_ae
+    from pytorch_lightning.callbacks.early_stopping import EarlyStopping
     import os
     import random
     import datetime
@@ -210,6 +214,7 @@ def main(args):
 
     val_data= PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
     val_loader = DataLoader(val_data, batch_size=args.batch_size, drop_last=True, num_workers=24)
+    # loader = LitDataModule(args.batch_size, data,val_data)
 
     # save checkpoint on last epoch only
     ckpt_dir = f"/home/uz1/projects/GCN/logging/{data.__class__.__name__}/{pz}/{im_s}"
@@ -226,22 +231,28 @@ def main(args):
     callbacks.append(testRecon)
 
 
+    early_stop_callback = EarlyStopping(monitor="val_elbo", min_delta=0.00, patience=3, verbose=False, mode="min",stopping_threshold=0.00)
+    callbacks.append(early_stop_callback)
+
+
+
     pl.seed_everything(1234)
 
     vae = VAE(input_height=data[0][0].shape[2], latent_dim=256)
     print("Using input shape: ", data[0][0].shape, " latent dim: ", 256)
     # model = deeplab(args={'n_channel': 3, 'n_classes': 2})
-    trainer = pl.Trainer(gpus=1,
-                        max_epochs=10,
+    trainer = pl.Trainer(gpus=2,
+                        max_epochs=10, #auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
-                        
+                         
                         callbacks=callbacks,strategy="dp")
     
     if args.use_pretrain == True and not os.path.exists(ckpt_dir):
         vae2 = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
         vae.encoder = vae2.encoder
-        trainer = pl.Trainer(gpus=1,
-                        max_epochs=3,
+        vae.batch_size = args.batch_size
+        trainer = pl.Trainer(devices=1, accelerator="auto",
+                        max_epochs=10,#auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
                         
                         callbacks=callbacks,strategy="dp")
@@ -276,25 +287,28 @@ def main(args):
     h = im_s
     p_z = pz
     print("Using a VAE with h=",h,"and p(z)=",p_z)
+    if args.batch_size < args.num_nodes:
+        args.batch_size = args.batch_size * 2
+        loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=24)
+    if not os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl"):
+        kmeans = MiniBatchKMeans(n_clusters=args.num_nodes)
+        for i in tqdm(range(num_points),total=num_points):
+            test,_ = next(iter(loader))
+            test = test.to(vae.device)
+            if test.dim() >4:
+                test = test.reshape(-1, test.shape[2], test.shape[3], test.shape[4]) # batch, num patches ,channel, height, width to batch, channel, height, width
+            x_encoded = vae.encoder(test)
+            mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
+            std = torch.exp(log_var / 2)
+            q = torch.distributions.Normal(mu, std)
+            z = q.rsample()
+            z=z.detach().cpu().numpy()
+            kmeans.partial_fit(z)
+        print("Done - out shape ",z.shape)
+        with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl", 'wb') as f:
+            pickle.dump(kmeans, f)
 
-    kmeans = MiniBatchKMeans(n_clusters=args.num_nodes)
-    for i in tqdm(range(num_points),total=num_points):
-        test,_ = next(iter(loader))
-        test = test.to(vae.device)
-        if test.dim() >4:
-            test = test.reshape(-1, test.shape[2], test.shape[3], test.shape[4]) # batch, num patches ,channel, height, width to batch, channel, height, width
-        x_encoded = vae.encoder(test)
-        mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
-        std = torch.exp(log_var / 2)
-        q = torch.distributions.Normal(mu, std)
-        z = q.rsample()
-        z=z.detach().cpu().numpy()
-        kmeans.partial_fit(z)
-    print("Done - out shape ",z.shape)
-    with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl", 'wb') as f:
-        pickle.dump(kmeans, f)
-
-
+    print("Kmeans Done !")
 
 
 
