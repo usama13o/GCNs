@@ -231,14 +231,14 @@ def main(args):
     callbacks.append(testRecon)
 
 
-    early_stop_callback = EarlyStopping(monitor="val_elbo", min_delta=0.00, patience=3, verbose=False, mode="min",stopping_threshold=0.00)
+    early_stop_callback = EarlyStopping(monitor="val_elbo", min_delta=0.00, patience=3, verbose=False, mode="min",stopping_threshold=-2000.00)
     callbacks.append(early_stop_callback)
 
 
 
     pl.seed_everything(1234)
 
-    vae = VAE(input_height=data[0][0].shape[2], latent_dim=256)
+    vae2 = VAE(input_height=data[0][0].shape[2], latent_dim=256)
     print("Using input shape: ", data[0][0].shape, " latent dim: ", 256)
     # model = deeplab(args={'n_channel': 3, 'n_classes': 2})
     trainer = pl.Trainer(gpus=2,
@@ -248,11 +248,12 @@ def main(args):
                         callbacks=callbacks,strategy="dp")
     
     if args.use_pretrain == True and not os.path.exists(ckpt_dir):
-        vae2 = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
-        vae.encoder = vae2.encoder
+        vae = vae2.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
+        vae.decoder.upscale1.size =  vae2.decoder.upscale1.size
         vae.batch_size = args.batch_size
+        print("upscale size : ",vae.decoder.upscale1.size, " - transfering from input hieght : ",vae.input_height)
         trainer = pl.Trainer(devices=1, accelerator="auto",
-                        max_epochs=10,#auto_scale_batch_size=True,
+                        max_epochs=2,#auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
                         
                         callbacks=callbacks,strategy="dp")
