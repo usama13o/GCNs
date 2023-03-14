@@ -264,7 +264,7 @@ def main(args):
     else:
         print("ckpt found at: ", ckpt_dir)
         ckpt_dir = glob.glob(f"{ckpt_dir}/*.ckpt")[0]
-        vae = vae.load_from_checkpoint(ckpt_dir)
+        vae = vae2.load_from_checkpoint(ckpt_dir)
 
     num_points = 700 if len(data) > 20000 else len(data)
     
@@ -289,8 +289,8 @@ def main(args):
     p_z = pz
     print("Using a VAE with h=",h,"and p(z)=",p_z)
     if args.batch_size < args.num_nodes:
-        args.batch_size = args.batch_size * 2
-        loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=24)
+        args.batch_size = args.num_nodes
+        loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=0)
     if not os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl"):
         kmeans = MiniBatchKMeans(n_clusters=args.num_nodes)
         for i in tqdm(range(num_points),total=num_points):

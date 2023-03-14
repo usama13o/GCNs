@@ -753,11 +753,11 @@ import numpy as np
 from torch_geometric.data import Data,Dataset
 from tqdm import tqdm
 #create h5py file
-if os.path.exists(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
-    print("File already exists at ", f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
+# if os.path.exists(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
+    # print("File already exists at ", f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
 
     #exit
-    exit("File already exists")
+    # exit("File already exists")
 
 h5f = h5py.File(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
 
