@@ -10,6 +10,7 @@ from pl_bolts.models.autoencoders.components import (
     resnet18_encoder,
 )
 import torch
+from componants import DecoderBlock
 
 import torch.utils.data as data
 import numpy as np
@@ -42,11 +43,103 @@ args = args.parse_args()
 # log file name  - date and time
 log_file_name = "vae_log_k-" + str(args.k) + "_" + time.strftime("%Y%m%d-%H%M%S")
 # init log file txt
-f = open(f"/home/uz1/projects/GCN/{log_file_name}.txt","w")
-f.close()
 # modify print to be log to txt (Doesn't seem to do the trick !)
 
 print("init gen graphs\n with args \n", args)   
+class Interpolate(nn.Module):
+    """nn.Module wrapper for F.interpolate."""
+
+    def __init__(self, size=None, scale_factor=None):
+        super().__init__()
+        self.size, self.scale_factor = size, scale_factor
+
+    def forward(self, x):
+        return F.interpolate(x, size=self.size, scale_factor=self.scale_factor)
+def resize_conv1x1(in_planes, out_planes, scale=1):
+    """upsample + 1x1 convolution with padding to avoid checkerboard artifact."""
+    if scale == 1:
+        return conv1x1(in_planes, out_planes)
+    return nn.Sequential(Interpolate(scale_factor=scale), conv1x1(in_planes, out_planes))
+def conv1x1(in_planes, out_planes, stride=1):
+    """1x1 convolution."""
+    return nn.Conv2d(in_planes, out_planes, kernel_size=1, stride=stride, bias=False)
+
+class Resdecoder(nn.Module):
+    def __init__(self, x,latent_dim=256, input_height=224, first_conv=False, maxpool1=False):
+        # super().__init__(   DecoderBlock, [2, 2, 2, 2],latent_dim=latent_dim, input_height=input_height, first_conv=first_conv, maxpool1=maxpool1)
+        super().__init__()
+        self.block = DecoderBlock
+        self.latent_dim = latent_dim
+        self.expansion = self.block.expansion
+        self.first_conv = first_conv
+        self.maxpool1 = maxpool1
+        self.input_height = input_height
+        self.layers = [2, 2, 2, 2]
+        self.upscale_factor = 8
+        
+
+        _, self.c, self.h, self.w = x.shape
+        block = self.block
+        layers = self.layers
+        out_put_shape = self.c # * self.h * self.w
+        self.linear = torch.nn.Linear(self.latent_dim, out_put_shape * self.h * self.w)
+        self.inplanes = out_put_shape
+
+
+
+        self.layer1 = self._make_layer(block, 256, layers[0], scale=2)
+        self.layer2 = self._make_layer(block, 128, layers[1], scale=2)
+        self.layer3 = self._make_layer(block, 64, layers[2], scale=2)
+
+        if self.maxpool1:
+            self.layer4 = self._make_layer(block, 64, layers[3], scale=2)
+            self.upscale_factor *= 2
+        else:
+            self.layer4 = self._make_layer(block, 64, layers[3])
+
+        if self.first_conv:
+            self.upscale = Interpolate(scale_factor=2)
+            self.upscale_factor *= 2
+        else:
+            self.upscale = Interpolate(scale_factor=1)
+
+        # interpolate after linear layer using scale factor
+        self.upscale1 = Interpolate(size=self.input_height // self.upscale_factor)
+
+        self.conv1 = nn.Conv2d(64 * block.expansion, 3, kernel_size=3, stride=1, padding=1, bias=False)
+    def _make_layer(self, block, planes, blocks, scale=1):
+        upsample = None
+        if scale != 1 or self.inplanes != planes * block.expansion:
+            upsample = nn.Sequential(
+                resize_conv1x1(self.inplanes, planes * block.expansion, scale),
+                nn.BatchNorm2d(planes * block.expansion),
+            )
+
+        layers = []
+        layers.append(block(self.inplanes, planes, scale, upsample))
+        self.inplanes = planes * block.expansion
+        for _ in range(1, blocks):
+            layers.append(block(self.inplanes, planes))
+
+        return nn.Sequential(*layers)
+
+    def forward(self, x):
+        x = self.linear(x)
+
+        x = x.view(x.size(0), self.c, self.h, self.w)
+        x = self.upscale1(x)
+        # print('in to l1',x.shape)
+        x = self.layer1(x)
+        x = self.layer2(x)
+        x = self.layer3(x)
+        x = self.layer4(x)
+        x = self.upscale(x)
+
+        x = self.conv1(x)
+
+        return x
+
+from torchvision.models import swin_transformer
 class VAE(pl.LightningModule):
     def __init__(self, enc_out_dim=512, latent_dim=256, input_height=32):
         super().__init__()
@@ -235,19 +328,12 @@ vae = VAE(input_height=args.vae_input_h, latent_dim=1024)
 
 # %%
 
-vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/epoch=20-step=172031.ckpt")
-if args.dataset == "pathmnist":
-    
-    name = glob.glob(f"/home/uz1/projects/GCN/logging/PathMNIST/{args.patch_size}/{args.image_transform_size}/*")[-1]
-    print("VAE model path :  ",name)
-    vae = vae.load_from_checkpoint(name)
-if args.dataset == "dermamnist":
-    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/DermaMNIST/epoch=378-step=10232.ckpt")
-if args.dataset == "bloodmnist":
-    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/BloodMNIST/epoch=486-step=22401.ckpt")
-if args.dataset == "combinedmnist":
-    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
-#load images to be patched
+# vae = vae.load_from_checkpoint(r"C:\Users\Usama\data\ckpt\epoch=0-step=8999.ckpt")
+
+name = glob.glob(fr"C:\Users\Usama\data\ckpt\{args.dataset}\{args.patch_size}\{args.image_transform_size}\*")[-1]
+print("VAE model path :  ",name)
+vae = vae.load_from_checkpoint(name)
+
 
 from torchvision import transforms
 from torch.utils.data import DataLoader
@@ -285,81 +371,58 @@ if args.dataset == "pcam":
 if args.dataset == 'pathmnist':
     n_classes=9
     from medmnist.dataset import PathMNIST
-    data_128 = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
-    valid_dataset = PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
-    with open("/home/uz1/projects/GCN/kmeans-model-128-32-8-PathMNIST.pkl", "rb") as f:
-        k = pickle.load(f)
-    if args.k==16:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-32-16-PathMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k==32:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-32-32-PathMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k ==128:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-PathMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 64:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-32-64-PathMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
+    data_128 = PathMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
+    valid_dataset = PathMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
+    
     if args.patch_size != 0:
-        with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-PathMNIST.pkl", "rb") as f:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-PathMNIST.pkl", "rb") as f:
             k = pickle.load(f)
     args.nclusters = args.k
 if args.dataset == 'dermamnist':
     from medmnist.dataset import DermaMNIST
-    data_128 = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
-    valid_dataset = DermaMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    data_128 = DermaMNIST(root=r"C:\Users\Usama\data",download=True,split='train',transform=transform)
+    valid_dataset = DermaMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
     n_classes = 7
-    if args.k == 16:
-        with open("/home/uz1/projects/GCN/kmeans-model-16-DermaMNIST.pkl", "rb") as f:
+    if args.patch_size != 0:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-DermaMNIST.pkl", "rb") as f:
             k = pickle.load(f)
-    if args.k == 32:
-        with open("/home/uz1/projects/GCN/kmeans-model-32-DermaMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 64:
-        with open("/home/uz1/projects/GCN/kmeans-model-64-DermaMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 128:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-DermaMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 8: 
-        with open("/home/uz1/projects/GCN/kmeans-model-8-medmnist-derma.pkl", "rb") as f:
-            k = pickle.load(f)
+    else:
+        raise ValueError("Patch size must be specified for DermaMNIST")
 if args.dataset == 'bloodmnist':
     from medmnist.dataset import BloodMNIST
     data_128 = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
     n_classes = 8
     if args.k == 16:
-        with open("/home/uz1/projects/GCN/kmeans-model-16-BloodMNIST.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-BloodMNIST.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 32:
-        with open("/home/uz1/projects/GCN/kmeans-model-32-BloodMNIST.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-BloodMNIST.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 64:
-        with open("/home/uz1/projects/GCN/kmeans-model-64-BloodMNIST.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-BloodMNIST.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 128:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-BloodMNIST.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-BloodMNIST.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 8:
-        with open("/home/uz1/projects/GCN/kmeans-model-7-medmnist-blood.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-7-medmnist-blood.pkl", "rb") as f:
             k = pickle.load(f)
 if args.dataset == 'combinedmnist':    
     from datasets import  combined_medinst_dataset
     n_classes = 91
     data_128 = combined_medinst_dataset(root='/home/uz1/DATA!/medmnist', split='train',transform=transform)
     if args.k == 16:
-        with open("/home/uz1/projects/GCN/kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 32:
-        with open("/home/uz1/projects/GCN/kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 64:
-        with open("/home/uz1/projects/GCN/kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 128:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
 
 
@@ -372,18 +435,18 @@ args.nclusters = args.k
 # if use_combined change Kmeans and vae to
 if args.use_combined:
     if args.k == 16:
-        with open("/home/uz1/projects/GCN/kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 32:
-        with open("/home/uz1/projects/GCN/kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 64:
-        with open("/home/uz1/projects/GCN/kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
     if args.k == 128:
-        with open("/home/uz1/projects/GCN/kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
+        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
             k = pickle.load(f)
-    vae = vae.load_from_checkpoint("/home/uz1/projects/GCN/logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
+    vae = vae.load_from_checkpoint(r"C:\Users\Usama\projects\GCNs\kmeans\logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
 
     print("### USING COMBINED VAE AND KMEANS ###") 
 # %%
@@ -704,7 +767,7 @@ ImData2 = ImageTOGraphDataset(data=data_128,vae=vae,kmeans=k,return_x_only=True)
 sampler = torch.utils.data.sampler.BatchSampler(
     torch.utils.data.sampler.RandomSampler(ImData),
     batch_size=args.batch_size,
-    drop_last=False)
+    drop_last=True)
 train_loader = GraphDataLoader(ImData, batch_size=1, shuffle=False, num_workers=0,sampler = sampler)
 
 # #time how long it takes to load data 
@@ -753,13 +816,13 @@ import numpy as np
 from torch_geometric.data import Data,Dataset
 from tqdm import tqdm
 #create h5py file
-# if os.path.exists(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
-    # print("File already exists at ", f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
+# if os.path.exists(f'C:\Users\Usama\projects\GCNs\kmeans\graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5'):
+    # print("File already exists at ", f'C:\Users\Usama\projects\GCNs\kmeans\graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5')
 
     #exit
     # exit("File already exists")
 
-h5f = h5py.File(f'/home/uz1/projects/GCN/graph_data/graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
+h5f = h5py.File(fr'C:\Users\Usama\data\graph-data---{args.dataset}-{args.patch_size}-{args.nclusters}-{args.image_transform_size}-UC_{args.use_combined}.h5', 'w')
 
 #create dataset in file
 
@@ -775,7 +838,8 @@ edge_i = []
 edge_at = []
 ys=[]
 tmp=0
-for i,d in tqdm(enumerate(train_loader),total=len(train_loader)):
+print("Started saving data to h5py file")
+for i,d in tqdm(enumerate(train_loader),total=len(train_loader),desc="Saving data to h5py file"):
 
     h5f['x'][tmp:tmp+d[0].squeeze().shape[0]] = d[0].reshape(-1,n_clusters,embed_size)
     tmp=tmp+d[0].squeeze().shape[0]
@@ -794,5 +858,5 @@ h5f.create_dataset('ys', data=ys)
 
 #close the file
 h5f.close()
-
+print("Finished saving data to h5py file")
 # %%

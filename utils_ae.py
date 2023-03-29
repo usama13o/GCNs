@@ -1,6 +1,4 @@
 from typing import Iterable
-from matplotlib import pyplot as plt
-import nibabel as nib
 import numpy as np
 import os
 import torchvision.transforms as tt
@@ -100,23 +98,6 @@ def open_image_np_bw(path):
     im = open_image(path)
     array = np.array(im)
     return array[:,:,np.newaxis].repeat(3,axis=2)
-def load_nifti_img(filepath, dtype):
-    '''
-    NIFTI Image Loader
-    :param filepath: path to the input NIFTI image
-    :param dtype: dataio type of the nifti numpy array
-    :return: return numpy array
-    '''
-    nim = nib.load(filepath)
-    out_nii_array = np.array(nim.get_data(),dtype=dtype)
-    out_nii_array = np.squeeze(out_nii_array) # drop singleton dim in case temporal dim exists
-    meta = {'affine': nim.get_affine(),
-            'dim': nim.header['dim'],
-            'pixdim': nim.header['pixdim'],
-            'name': os.path.basename(filepath)
-            }
-
-    return out_nii_array, meta
 
 
 
@@ -168,46 +149,3 @@ class Resize:
             return np.array(_input), np.array(_input_y)[:,:,np.newaxis]
         else:
             return np.array(_input)
-def show_closest_images(train_img_embeds,k=50):
-    from sklearn.neighbors import NearestNeighbors
-    import numpy as np
-    neigh = NearestNeighbors(n_neighbors=k)
-    nn = neigh.fit(train_img_embeds[1])
-    ind_list=[]
-    for i in range(1700,1800):
-        print(i)
-        _,ind = nn.kneighbors(train_img_embeds[1][i].reshape(1,-1))
-        ind_list.extend(*ind)
-    topk = np.unique(ind_list,return_counts=True)[0][np.argpartition(np.unique(ind_list,return_counts=True)[1], -4)[-4:]]
-    print("topk --> ",topk)
-    topk_imgs=torch.cat([train_img_embeds[0][topk]],dim=0)
-    img_g = torchvision.utils.make_grid(topk_imgs,nrow=4,normalize=True,range=(-1,1)).permute(1,2,0)
-    plt.figure(figsize=(12, 3))
-    plt.imshow(img_g)
-    plt.axis('off')
-def find_similar_images(query_img, query_z, key_embeds, K=8,knn=False,dist_metric='cos'):
-        # Find closest K images. We use the euclidean distance here but other like cosine distance can also be used.
-        if dist_metric== 'cos':
-            dist = torch.cosine_similarity(query_z[None, :], key_embeds[1])
-        else:
-            dist = torch.cdist(query_z[None, :], key_embeds[1],p=2)
-        dist = dist.squeeze(dim=0)
-        if knn:
-            from sklearn.neighbors import NearestNeighbors 
-            neigh = NearestNeighbors(n_neighbors=8)
-            nn = neigh.fit(key_embeds[1])
-            dist, indices = nn.kneighbors(query_z.reshape(1,-1))
-            indices = indices.reshape(-1)
-        else:
-            dist, indices = torch.sort(dist)
-        # Plot K closest images
-        imgs_to_display = torch.cat(
-            [query_img[None], key_embeds[0][indices[:K]]], dim=0)
-        grid = torchvision.utils.make_grid(
-            imgs_to_display, nrow=K+1, normalize=True, range=(-1, 1))
-        grid = grid.permute(1, 2, 0)
-        plt.figure(figsize=(12, 3))
-        plt.imshow(grid)
-        plt.axis('off')
-        plt.savefig(f'grid_{indices[1]}_{dist_metric}_knn__{str(knn)}.png')
-        # plt.show()

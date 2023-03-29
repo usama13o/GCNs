@@ -3,10 +3,13 @@ import glob
 import torch
 import numpy as np
 import PIL.Image
-import matplotlib.pyplot as plt
 
 from datasets import DivideIntoPatches
 import argparse
+from torchvision.models import swin_transformer
+from componants import DecoderBlock
+from torch import nn
+import torch.nn.functional as F
 
 def main(args):
     im_s  = args.img_size
@@ -191,12 +194,12 @@ def main(args):
     # data = HDF5Dataset("/home/uz1/DATA!/pcam/pcam/training_split.h5","/home/uz1/DATA!/pcam/Labels/Labels/camelyonpatch_level_2_split_train_y.h5",transform=transform)
     from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
     # using a unified ataset of medmnist
-    from datasets import combined_medinst_dataset
-
-    # num_patches = (im_s // pz) ** 2
     # # batch size should depend oon num_patches by 
     # batch_size = 128 // (num_patches)
-    data = PathMNIST(root='/home/uz1/DATA!/medmnist', split='test',transform=transform)
+    if args.dataset == "pathmnist":
+        data = PathMNIST(root=r"C:\Users\Usama\data", split='test',transform=transform)
+    elif args.dataset == "dermamnist":
+        data = DermaMNIST(root=r"C:\Users\Usama\data", split='test',transform=transform,download=True)
     loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=24)
 
 
@@ -211,8 +214,10 @@ def main(args):
     callbacks = []
     lr_monitor = LearningRateMonitor(logging_interval="epoch")
     callbacks.append(lr_monitor)
-
-    val_data= PathMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
+    if args.dataset == "pathmnist":
+        val_data= PathMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
+    if args.dataset == "dermamnist":
+        val_data= DermaMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
     val_loader = DataLoader(val_data, batch_size=args.batch_size, drop_last=True, num_workers=24)
     # loader = LitDataModule(args.batch_size, data,val_data)
 
@@ -245,18 +250,17 @@ def main(args):
                         max_epochs=10, #auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
                          
-                        callbacks=callbacks,strategy="dp")
+                        callbacks=callbacks)
     
     if args.use_pretrain == True and not os.path.exists(ckpt_dir):
         vae = vae2.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
         vae.decoder.upscale1.size =  vae2.decoder.upscale1.size
         vae.batch_size = args.batch_size
-        print("upscale size : ",vae.decoder.upscale1.size, " - transfering from input hieght : ",vae.input_height)
-        trainer = pl.Trainer(devices=1, accelerator="auto",
-                        max_epochs=2,#auto_scale_batch_size=True,
+        trainer = pl.Trainer(gpus=1,
+                        max_epochs=10,#auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
                         
-                        callbacks=callbacks,strategy="dp")
+                        callbacks=callbacks,num_sanity_val_steps=0)
         print("Using pretrained model")
         trainer.fit(vae, loader,val_loader)
         print("Training finished")
@@ -275,7 +279,7 @@ def main(args):
     num_points = 16000 // (num_patches * args.batch_size)
     print("given num_patches: ", num_patches, " num_points: ", num_points)
 
-    vae = vae.to('cpu')
+    vae = vae.to('cuda')
 
 
 
@@ -310,7 +314,6 @@ def main(args):
             pickle.dump(kmeans, f)
 
     print("Kmeans Done !")
-
 
 
 if __name__ == "__main__":
