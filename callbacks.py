@@ -36,6 +36,10 @@ class TestReconCallback_vae(pl.Callback):
             with torch.no_grad():
                 pl_module.eval()
                 # print("Encoding !")
+                if input_imgs.dim() == 3:
+                    input_imgs = input_imgs.unsqueeze(1)
+                    input_imgs = input_imgs.repeat(1, 3, 1, 1)
+
                 x_encoded = vae.encoder(input_imgs)
                 # print("encoded, ", x_encoded.shape)
                 

@@ -327,15 +327,18 @@ pl.seed_everything(1234)
 vae = VAE(input_height=args.vae_input_h, latent_dim=1024)
 
 # %%
-
+import medmnist
+import difflib
 # vae = vae.load_from_checkpoint(r"C:\Users\Usama\data\ckpt\epoch=0-step=8999.ckpt")
-
-name = glob.glob(fr"C:\Users\Usama\data\ckpt\{args.dataset}\{args.patch_size}\{args.image_transform_size}\*")[-1]
+d = difflib.get_close_matches(args.dataset,medmnist.dataset.INFO.keys())[0]
+d = medmnist.dataset.INFO[d]['python_class']
+name = glob.glob(fr"C:\Users\Usama\data\ckpt\{d}\{args.patch_size}\{args.image_transform_size}\*")[-1]
 print("VAE model path :  ",name)
 vae = vae.load_from_checkpoint(name)
 
 
 from torchvision import transforms
+from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
 from torch.utils.data import DataLoader
 ## images as 128x128 to 16 patches (each 32x32)
 # transform = transforms.Compose([
@@ -370,7 +373,6 @@ if args.dataset == "pcam":
             k = pickle.load(f)
 if args.dataset == 'pathmnist':
     n_classes=9
-    from medmnist.dataset import PathMNIST
     data_128 = PathMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
     valid_dataset = PathMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
     
@@ -379,7 +381,6 @@ if args.dataset == 'pathmnist':
             k = pickle.load(f)
     args.nclusters = args.k
 if args.dataset == 'dermamnist':
-    from medmnist.dataset import DermaMNIST
     data_128 = DermaMNIST(root=r"C:\Users\Usama\data",download=True,split='train',transform=transform)
     valid_dataset = DermaMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
     n_classes = 7
@@ -389,41 +390,27 @@ if args.dataset == 'dermamnist':
     else:
         raise ValueError("Patch size must be specified for DermaMNIST")
 if args.dataset == 'bloodmnist':
-    from medmnist.dataset import BloodMNIST
     data_128 = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='train',transform=transform)
     valid_dataset = BloodMNIST(root='/home/uz1/DATA!/medmnist', download=True,split='val',transform=transform)
     n_classes = 8
-    if args.k == 16:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-BloodMNIST.pkl", "rb") as f:
+    if args.patch_size != 0:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-BloodMNIST.pkl", "rb") as f:
             k = pickle.load(f)
-    if args.k == 32:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-BloodMNIST.pkl", "rb") as f:
+if  d.lower() == PneumoniaMNIST.__name__.lower():
+    data_128 = PneumoniaMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
+    valid_dataset = PneumoniaMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
+    n_classes = 3
+    if args.patch_size != 0:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-{d}.pkl", "rb") as f:
             k = pickle.load(f)
-    if args.k == 64:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-BloodMNIST.pkl", "rb") as f:
+if d.lower() == OrganSMNIST.__name__.lower():
+    data_128 = OrganSMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
+    valid_dataset = OrganSMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
+    n_classes = 11
+    if args.patch_size != 0:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-{d}.pkl", "rb") as f:
             k = pickle.load(f)
-    if args.k == 128:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-BloodMNIST.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 8:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-7-medmnist-blood.pkl", "rb") as f:
-            k = pickle.load(f)
-if args.dataset == 'combinedmnist':    
-    from datasets import  combined_medinst_dataset
-    n_classes = 91
-    data_128 = combined_medinst_dataset(root='/home/uz1/DATA!/medmnist', split='train',transform=transform)
-    if args.k == 16:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 32:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 64:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 128:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
+
 
 
         
@@ -432,23 +419,7 @@ loader = DataLoader(data_128, batch_size=32, drop_last=True, num_workers=16)
 
 args.nclusters = args.k
 
-# if use_combined change Kmeans and vae to
-if args.use_combined:
-    if args.k == 16:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-16-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 32:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-32-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 64:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-64-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    if args.k == 128:
-        with open(r"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-128-combined_medinst_dataset.pkl", "rb") as f:
-            k = pickle.load(f)
-    vae = vae.load_from_checkpoint(r"C:\Users\Usama\projects\GCNs\kmeans\logging/combined_medinst_dataset/epoch=13-step=56672.ckpt")
 
-    print("### USING COMBINED VAE AND KMEANS ###") 
 # %%
 # %%
 from torchvision.transforms import ToPILImage,ToTensor
@@ -583,6 +554,8 @@ ds = GridPatchDatasetWithLabels(data=images,
 
 # %%
 def get_embedding_vae(x,vae):
+    if x.shape[1]<3:
+        x = x.repeat(1,3,1,1)
 
     x_encoded = vae.encoder(x)
     mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
@@ -696,6 +669,7 @@ class ImageTOGraphDatasetBatched(Dataset):
         n_graphs = patches.shape[0] // self.n_patches
         n_clusters = self.kmeans.cluster_centers_.shape[0]
         ys = np.concatenate([self.data[i][1] for i in index],0)
+        
         z=get_embedding_vae(patches,self.vae.cuda()).clone().detach().cpu().numpy()
         label=self.kmeans.predict(z)
         s,out_adj = populateSBatched(label,n_clusters,n_graphs=n_graphs,n_patches=self.n_patches)

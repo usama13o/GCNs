@@ -81,8 +81,8 @@ def main(args):
             x, _ = batch
             #if channels are less than 3, repeat channels
             # print(x.shape)
-            if x.shape[1] < 3:
-                x = x.repeat(1, 3, 1, 1)
+            if x.shape[2] < 3:
+                x = x.repeat(1, 1, 3, 1,1)
             if x.dim() >3: # b,16,3,h,w -> b*16,3,h,w
                 x = x.view(-1, x.shape[2], x.shape[3], x.shape[4])
             # encode x to get the mu and variance parameters
@@ -125,8 +125,8 @@ def main(args):
             x, _ = batch
             #if channels are less than 3, repeat channels
             # print(x.shape)
-            if x.shape[1] < 3:
-                x = x.repeat(1, 3, 1, 1)
+            if x.shape[2] < 3:
+                x = x.repeat(1, 1, 3, 1,1)
             # print(x.shape)
             if x.dim() >3: # b,16,3,h,w -> b*16,3,h,w
                 x = x.view(-1, x.shape[2], x.shape[3], x.shape[4])
@@ -195,11 +195,28 @@ def main(args):
     from medmnist.dataset import PathMNIST, BreastMNIST,OCTMNIST,ChestMNIST,PneumoniaMNIST,DermaMNIST,RetinaMNIST,BloodMNIST,TissueMNIST,OrganAMNIST,OrganCMNIST,OrganSMNIST
     # using a unified ataset of medmnist
     # # batch size should depend oon num_patches by 
-    # batch_size = 128 // (num_patches)
+
+    import medmnist
+    import difflib
+    d = difflib.get_close_matches(args.dataset,medmnist.dataset.INFO.keys())[0]
+    d = medmnist.dataset.INFO[d]['python_class']
     if args.dataset == "pathmnist":
         data = PathMNIST(root=r"C:\Users\Usama\data", split='test',transform=transform)
     elif args.dataset == "dermamnist":
         data = DermaMNIST(root=r"C:\Users\Usama\data", split='test',transform=transform,download=True)
+    elif args.dataset == "pnemonmnist":
+        data = PneumoniaMNIST(root=r"C:\Users\Usama\data", split='train',transform=transform,download=True)
+    elif args.dataset == "organsmnist":
+        data = OrganSMNIST(root=r"C:\Users\Usama\data", split='train',transform=transform,download=True)
+    elif args.dataset == "octmnist":
+        data = OCTMNIST(root=r"C:\Users\Usama\data", split='train',transform=transform,download=True)
+        val_data = OCTMNIST(root=r"C:\Users\Usama\data", split='val',transform=transform,download=True)
+    elif args.dataset == "chestmnist":
+        data = ChestMNIST(root=r"C:\Users\Usama\data", split='train',transform=transform,download=True)
+        val_data = ChestMNIST(root=r"C:\Users\Usama\data", split='val',transform=transform,download=True)
+    elif args.dataset == "breastmnist":
+        data = BreastMNIST(root=r"C:\Users\Usama\data", split='train',transform=transform,download=True)
+        val_data = BreastMNIST(root=r"C:\Users\Usama\data", split='val',transform=transform,download=True)
     loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=24)
 
 
@@ -218,11 +235,15 @@ def main(args):
         val_data= PathMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
     if args.dataset == "dermamnist":
         val_data= DermaMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
+    if args.dataset == "pnemonmnist":
+        val_data= PneumoniaMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
+    if args.dataset == 'organsmnist':
+        val_data= OrganSMNIST(root=r"C:\Users\Usama\data",download=True,split='val',transform=transform)
     val_loader = DataLoader(val_data, batch_size=args.batch_size, drop_last=True, num_workers=24)
     # loader = LitDataModule(args.batch_size, data,val_data)
 
     # save checkpoint on last epoch only
-    ckpt_dir = f"/home/uz1/projects/GCN/logging/{data.__class__.__name__}/{pz}/{im_s}"
+    ckpt_dir = fr"C:\Users\Usama\data\ckpt\{data.__class__.__name__}\{pz}\{im_s}"
     ckpt = ModelCheckpoint(ckpt_dir,
                         monitor="elbo",
                         save_weights_only=True)
@@ -246,14 +267,14 @@ def main(args):
     vae2 = VAE(input_height=data[0][0].shape[2], latent_dim=256)
     print("Using input shape: ", data[0][0].shape, " latent dim: ", 256)
     # model = deeplab(args={'n_channel': 3, 'n_classes': 2})
-    trainer = pl.Trainer(gpus=2,
+    trainer = pl.Trainer(gpus=1,
                         max_epochs=10, #auto_scale_batch_size=True,
                         #  progress_bar_refresh_rate=10,
                          
                         callbacks=callbacks)
     
     if args.use_pretrain == True and not os.path.exists(ckpt_dir):
-        vae = vae2.load_from_checkpoint("/home/uz1/projects/GCN/logging/PathMNIST/2023_02_18/epoch=9-step=74990.ckpt")
+        vae = vae2
         vae.decoder.upscale1.size =  vae2.decoder.upscale1.size
         vae.batch_size = args.batch_size
         trainer = pl.Trainer(gpus=1,
@@ -274,9 +295,10 @@ def main(args):
     
     h=int(int(data[0][0].shape[-1]) * sqrt(data[0][0].shape[0]))
     p_z = int(sqrt((h*h) // int(data[0][0].shape[0])))
-    num_points = num_points if (((h // p_z) * (h // p_z) ) * num_points ) % 16000 == 0 else 16000 // ((h // p_z) * (h // p_z))
+    # num_points = num_points if (((h // p_z) * (h // p_z) ) * num_points ) % 1600 == 0 else 1600 // ((h // p_z) * (h // p_z))
     num_patches= (h // p_z) * (h // p_z)
-    num_points = 16000 // (num_patches * args.batch_size)
+    num_batches = 1600 // (num_patches * args.batch_size)
+    num_points = (num_patches * args.batch_size) 
     print("given num_patches: ", num_patches, " num_points: ", num_points)
 
     vae = vae.to('cuda')
@@ -287,30 +309,37 @@ def main(args):
     from sklearn.cluster import MiniBatchKMeans
     import math
     import pickle
-    from math import sqrt
+    from math import sqrt,ceil
     from tqdm import tqdm
     h = im_s
     p_z = pz
-    print("Using a VAE with h=",h,"and p(z)=",p_z)
+    print("Using a VAE (for kmeans) with h=",h,"and p(z)=",p_z)
     if args.batch_size < args.num_nodes:
-        args.batch_size = args.num_nodes
-        loader = DataLoader(data, batch_size=args.batch_size, drop_last=True, num_workers=0)
-    if not os.path.exists(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl"):
-        kmeans = MiniBatchKMeans(n_clusters=args.num_nodes)
-        for i in tqdm(range(num_points),total=num_points):
-            test,_ = next(iter(loader))
-            test = test.to(vae.device)
-            if test.dim() >4:
-                test = test.reshape(-1, test.shape[2], test.shape[3], test.shape[4]) # batch, num patches ,channel, height, width to batch, channel, height, width
-            x_encoded = vae.encoder(test)
-            mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
-            std = torch.exp(log_var / 2)
-            q = torch.distributions.Normal(mu, std)
-            z = q.rsample()
-            z=z.detach().cpu().numpy()
+        num_sub_batches = ceil(args.num_nodes / num_points)
+    else:
+        num_sub_batches = 1
+    z_list = []
+    if not os.path.exists(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl"):
+        kmeans = MiniBatchKMeans(n_clusters=args.num_nodes,batch_size=args.batch_size,verbose=1)
+        for i in tqdm(range(num_batches),total=num_batches,desc="Kmeans"):
+            while num_sub_batches > 0:
+                test,_ = next(iter(loader))
+                test = test.to(vae.device)
+                if test.shape[2] < 3:
+                    test = test.repeat(1, 1, 3, 1,1)
+                if test.dim() >4:
+                    test = test.reshape(-1, test.shape[2], test.shape[3], test.shape[4]) # batch, num patches ,channel, height, width to batch, channel, height, width
+                x_encoded = vae.encoder(test)
+                mu, log_var = vae.fc_mu(x_encoded), vae.fc_var(x_encoded)
+                std = torch.exp(log_var / 2)
+                q = torch.distributions.Normal(mu, std)
+                z = q.rsample()
+                z=z.detach().cpu().numpy()
+                z_list.append(z)
+                num_sub_batches -= 1
             kmeans.partial_fit(z)
         print("Done - out shape ",z.shape)
-        with open(f"/home/uz1/projects/GCN/GraphGym/run/kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl", 'wb') as f:
+        with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl", 'wb') as f:
             pickle.dump(kmeans, f)
 
     print("Kmeans Done !")
@@ -324,7 +353,7 @@ if __name__ == "__main__":
     args.add_argument('-bs','--batch_size', type=int, default=8)
     args.add_argument('-k','--num_nodes', type=int, default=8)
     args.add_argument('-use_pretrain','--use_pretrain', type=bool, default=True)
-
+    args.add_argument('--dataset', type=str, default='pathmnist', )
     args = args.parse_args()
 
     patch_size = args.patch_size
