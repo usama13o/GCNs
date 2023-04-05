@@ -410,7 +410,16 @@ if d.lower() == OrganSMNIST.__name__.lower():
     if args.patch_size != 0:
         with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-{d}.pkl", "rb") as f:
             k = pickle.load(f)
-
+if d.lower() == BreastMNIST.__name__.lower():
+    data_128 = BreastMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
+    valid_dataset = BreastMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
+    n_classes = 2
+if d.lower() == OCTMNIST.__name__.lower():
+    data_128 = OCTMNIST(root=r"C:\Users\Usama\data", download=True,split='train',transform=transform)
+    valid_dataset = OCTMNIST(root=r"C:\Users\Usama\data", download=True,split='val',transform=transform)
+    n_classes = 4
+with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{args.image_transform_size}-{args.patch_size}-{args.k}-{d}.pkl", "rb") as f:
+    k = pickle.load(f)
 
 
         

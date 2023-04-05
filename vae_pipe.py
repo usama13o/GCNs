@@ -337,6 +337,7 @@ def main(args):
                 z=z.detach().cpu().numpy()
                 z_list.append(z)
                 num_sub_batches -= 1
+            z = np.concatenate(z_list, axis=0)
             kmeans.partial_fit(z)
         print("Done - out shape ",z.shape)
         with open(fr"C:\Users\Usama\projects\GCNs\kmeans\kmeans-model-{h}-{p_z}-{args.num_nodes}-{data.__class__.__name__}.pkl", 'wb') as f:
